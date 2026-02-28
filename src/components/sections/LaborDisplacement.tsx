@@ -12,14 +12,18 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { COLORS } from '../../lib/constants';
-import { MOCK_DATA, LAYOFFS_DATA } from '../../lib/mockData';
+import { COLORS, FRED_SERIES } from '../../lib/constants';
+import { LAYOFFS_DATA } from '../../lib/mockData';
+import { useEconomicData } from '../../hooks/useEconomicData';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
 import ChartSection from '../ui/ChartSection';
 import CustomTooltip from '../ui/CustomTooltip';
 
 export default function LaborDisplacement() {
+  const jolts = useEconomicData(FRED_SERIES.jolts_openings, 'jolts');
+  const unemployment = useEconomicData(FRED_SERIES.unemployment, 'unemployment');
+
   return (
     <div id="section-labor">
       <SectionCard
@@ -34,7 +38,7 @@ export default function LaborDisplacement() {
           <MiniStat label="INFO SECTOR JOBS" value="3.05M" change="-2.1% from peak" />
         </div>
 
-        <ChartSection title="TECH LAYOFFS — QUARTERLY (LAYOFFS.FYI)" height={200}>
+        <ChartSection title="TECH LAYOFFS — QUARTERLY (LAYOFFS.FYI)" height={200} mock>
           <ResponsiveContainer>
             <BarChart data={LAYOFFS_DATA}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
@@ -48,7 +52,7 @@ export default function LaborDisplacement() {
 
         <ChartSection title="JOLTS JOB OPENINGS (THOUSANDS)" height={200}>
           <ResponsiveContainer>
-            <AreaChart data={MOCK_DATA.jolts}>
+            <AreaChart data={jolts.data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.textDim }} />
               <YAxis tick={{ fontSize: 10, fill: COLORS.textDim }} />
@@ -61,7 +65,7 @@ export default function LaborDisplacement() {
 
         <ChartSection title="UNEMPLOYMENT RATE (%)" height={180}>
           <ResponsiveContainer>
-            <LineChart data={MOCK_DATA.unemployment}>
+            <LineChart data={unemployment.data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.textDim }} />
               <YAxis domain={[3, 5]} tick={{ fontSize: 10, fill: COLORS.textDim }} tickFormatter={(v: number) => `${v}%`} />

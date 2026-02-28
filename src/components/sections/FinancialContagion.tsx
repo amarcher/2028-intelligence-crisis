@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
   AreaChart,
   Area,
@@ -10,8 +11,8 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { COLORS } from '../../lib/constants';
-import { MOCK_DATA } from '../../lib/mockData';
+import { COLORS, FRED_SERIES } from '../../lib/constants';
+import { useEconomicData } from '../../hooks/useEconomicData';
 import type { DelinquencyDataPoint } from '../../lib/types';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
@@ -19,11 +20,18 @@ import ChartSection from '../ui/ChartSection';
 import CustomTooltip from '../ui/CustomTooltip';
 
 export default function FinancialContagion() {
-  const delinquencyData: DelinquencyDataPoint[] = MOCK_DATA.cc_delinquency.map((d, i) => ({
-    date: d.date,
-    cc: d.value,
-    mortgage: MOCK_DATA.mortgage_delinquency[i]?.value,
-  }));
+  const ccDelinquency = useEconomicData(FRED_SERIES.cc_delinquency, 'cc_delinquency');
+  const mortgageDelinquency = useEconomicData(FRED_SERIES.mortgage_delinquency, 'mortgage_delinquency');
+  const treasury = useEconomicData(FRED_SERIES.treasury_10y, 'treasury_10y');
+
+  const delinquencyData: DelinquencyDataPoint[] = useMemo(() =>
+    ccDelinquency.data.map((d, i) => ({
+      date: d.date,
+      cc: d.value,
+      mortgage: mortgageDelinquency.data[i]?.value,
+    })),
+    [ccDelinquency.data, mortgageDelinquency.data]
+  );
 
   return (
     <div id="section-financial">
@@ -55,7 +63,7 @@ export default function FinancialContagion() {
 
         <ChartSection title="10-YEAR TREASURY YIELD (%)" height={180}>
           <ResponsiveContainer>
-            <AreaChart data={MOCK_DATA.treasury_10y}>
+            <AreaChart data={treasury.data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.textDim }} />
               <YAxis domain={[3, 5]} tick={{ fontSize: 10, fill: COLORS.textDim }} tickFormatter={(v: number) => `${v}%`} />

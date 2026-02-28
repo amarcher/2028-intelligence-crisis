@@ -14,18 +14,16 @@ export default function Methodology() {
           METHODOLOGY &amp; DATA SOURCES
         </div>
         <p className="m-0 mb-2">
-          Data shown uses representative values based on publicly available sources. For a production version, this dashboard would pull live data from:
+          Economic data is pulled live from FRED and updated daily. Charts marked <span className="font-mono" style={{ color: COLORS.textDim }}>MOCK DATA</span> use manually curated or representative values pending automated data sources.
         </p>
         <div className="font-mono text-[11px]" style={{ color: COLORS.text }}>
-          <span style={{ color: COLORS.blue }}>FRED API</span> — BLS employment, JOLTS, unemployment, PCE, Treasury yields, delinquency rates
+          <span style={{ color: COLORS.blue }}>FRED API</span> <span style={{ color: COLORS.positive }}>(live)</span> — BLS employment, JOLTS, unemployment, savings rate, consumer sentiment, Treasury yields, delinquency rates
           <br />
-          <span style={{ color: COLORS.purple }}>Layoffs.fyi</span> — Tech layoff tracking (web scrape)
+          <span style={{ color: COLORS.purple }}>Layoffs.fyi</span> <span style={{ color: COLORS.textDim }}>(manual)</span> — Tech layoff tracking
           <br />
-          <span style={{ color: COLORS.warning }}>SEC EDGAR</span> — SaaS company quarterly filings, revenue, NRR
+          <span style={{ color: COLORS.warning }}>SEC EDGAR</span> <span style={{ color: COLORS.textDim }}>(manual)</span> — SaaS company quarterly revenue growth
           <br />
-          <span style={{ color: COLORS.teal }}>Zillow / Redfin</span> — Home values, inventory by metro
-          <br />
-          <span style={{ color: COLORS.accent }}>Public API pricing</span> — OpenAI, Anthropic published model pricing
+          <span style={{ color: COLORS.accent }}>Public API pricing</span> <span style={{ color: COLORS.textDim }}>(manual)</span> — OpenAI, Anthropic published model pricing
         </div>
         <p className="mt-3 mb-0 italic">
           Verdicts are editorial assessments updated as new data becomes available.

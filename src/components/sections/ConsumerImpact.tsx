@@ -9,14 +9,17 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { COLORS } from '../../lib/constants';
-import { MOCK_DATA } from '../../lib/mockData';
+import { COLORS, FRED_SERIES } from '../../lib/constants';
+import { useEconomicData } from '../../hooks/useEconomicData';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
 import ChartSection from '../ui/ChartSection';
 import CustomTooltip from '../ui/CustomTooltip';
 
 export default function ConsumerImpact() {
+  const savings = useEconomicData(FRED_SERIES.savings_rate, 'savings_rate');
+  const sentiment = useEconomicData(FRED_SERIES.consumer_confidence, 'consumer_confidence');
+
   return (
     <div id="section-consumer">
       <SectionCard
@@ -34,7 +37,7 @@ export default function ConsumerImpact() {
 
         <ChartSection title="PERSONAL SAVINGS RATE (%)" height={180}>
           <ResponsiveContainer>
-            <AreaChart data={MOCK_DATA.savings_rate}>
+            <AreaChart data={savings.data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.textDim }} />
               <YAxis tick={{ fontSize: 10, fill: COLORS.textDim }} tickFormatter={(v: number) => `${v}%`} />
@@ -46,7 +49,7 @@ export default function ConsumerImpact() {
 
         <ChartSection title="UNIVERSITY OF MICHIGAN CONSUMER SENTIMENT" height={180}>
           <ResponsiveContainer>
-            <LineChart data={MOCK_DATA.consumer_confidence}>
+            <LineChart data={sentiment.data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.textDim }} />
               <YAxis tick={{ fontSize: 10, fill: COLORS.textDim }} />

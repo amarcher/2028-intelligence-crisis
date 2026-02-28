@@ -25,7 +25,7 @@ export default function SaaSDisruption() {
         verdict="trending"
         accentColor={COLORS.blue}
       >
-        <ChartSection title="YoY REVENUE GROWTH (%) — PUBLIC SAAS BASKET" height={260}>
+        <ChartSection title="YoY REVENUE GROWTH (%) — PUBLIC SAAS BASKET" height={260} mock>
           <ResponsiveContainer>
             <LineChart data={SAAS_DATA}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
