@@ -1,13 +1,27 @@
 import { COLORS } from '../../lib/constants';
 
+type MiniStatSignal = 'alarming' | 'neutral' | 'reassuring';
+
 interface MiniStatProps {
   label: string;
   value: string;
   change?: string;
+  signal?: MiniStatSignal;
+  /** @deprecated Use signal instead */
   positive?: boolean;
 }
 
-export default function MiniStat({ label, value, change, positive }: MiniStatProps) {
+const SIGNAL_COLORS: Record<MiniStatSignal, string> = {
+  alarming: COLORS.accent,
+  neutral: COLORS.textDim,
+  reassuring: COLORS.positive,
+};
+
+export default function MiniStat({ label, value, change, signal, positive }: MiniStatProps) {
+  const changeColor = signal
+    ? SIGNAL_COLORS[signal]
+    : positive ? COLORS.positive : COLORS.accent;
+
   return (
     <div className="p-3 px-4 rounded-md border min-w-[140px]" style={{ background: COLORS.bg, borderColor: COLORS.border }}>
       <div className="text-[10px] tracking-[0.08em] font-mono mb-1" style={{ color: COLORS.textDim }}>
@@ -17,7 +31,7 @@ export default function MiniStat({ label, value, change, positive }: MiniStatPro
         {value}
       </div>
       {change && (
-        <div className="text-[11px] mt-0.5" style={{ color: positive ? COLORS.positive : COLORS.accent }}>
+        <div className="text-[11px] mt-0.5" style={{ color: changeColor }}>
           {change}
         </div>
       )}

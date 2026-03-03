@@ -17,9 +17,10 @@ const REVENUE_TAGS = [
 const COMPANIES: { ticker: string; cik: string }[] = [
   { ticker: 'NOW', cik: '0001373715' },  // ServiceNow
   { ticker: 'CRM', cik: '0001108524' },  // Salesforce
-  { ticker: 'MNDY', cik: '0001845338' }, // Monday.com
   { ticker: 'HUBS', cik: '0001404655' }, // HubSpot
   { ticker: 'FRSH', cik: '0001544522' }, // Freshworks
+  { ticker: 'WDAY', cik: '0001327811' }, // Workday
+  { ticker: 'DDOG', cik: '0001561550' }, // Datadog
 ];
 
 interface EdgarUnit {

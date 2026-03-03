@@ -1,4 +1,4 @@
-import { SAAS_SERIES } from '../lib/constants';
+import { SAAS_SERIES, ARTICLE_END_QUARTER } from '../lib/constants';
 import { SAAS_DATA } from '../lib/mockData';
 import { useSupabase } from './useSupabase';
 import type { SaaSDataPoint } from '../lib/types';
@@ -18,27 +18,50 @@ function dbDateToQuarterLabel(date: string): string {
   return `${year}-Q${quarter}`;
 }
 
+function padSaaSToEnd(data: SaaSDataPoint[]): SaaSDataPoint[] {
+  if (!data.length) return data;
+  const last = data[data.length - 1].date;
+  if (last >= ARTICLE_END_QUARTER) return data;
+  const padding: SaaSDataPoint[] = [];
+  let y = parseInt(last.slice(0, 4));
+  let q = parseInt(last.slice(-1));
+  const ey = parseInt(ARTICLE_END_QUARTER.slice(0, 4));
+  const eq = parseInt(ARTICLE_END_QUARTER.slice(-1));
+  q++;
+  if (q > 4) { q = 1; y++; }
+  while (y < ey || (y === ey && q <= eq)) {
+    padding.push({ date: `${y}-Q${q}`, servicenow: null, salesforce: null, hubspot: null, freshworks: null, workday: null, datadog: null });
+    q++;
+    if (q > 4) { q = 1; y++; }
+  }
+  return [...data, ...padding];
+}
+
 export function useSaaSData(): UseSaaSDataResult {
-  // 5 explicit hook calls — required by React rules of hooks
+  // 6 explicit hook calls — required by React rules of hooks
   const nowResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.servicenow : '');
   const crmResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.salesforce : '');
-  const mndyResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.monday : '');
   const hubsResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.hubspot : '');
   const frshResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.freshworks : '');
+  const wdayResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.workday : '');
+  const ddogResult = useSupabase(USE_REAL_DATA ? SAAS_SERIES.datadog : '');
 
   if (!USE_REAL_DATA) {
-    return { data: SAAS_DATA, isLoading: false, error: null };
+    return { data: padSaaSToEnd(SAAS_DATA), isLoading: false, error: null };
   }
 
   const isLoading =
-    nowResult.isLoading || crmResult.isLoading || mndyResult.isLoading ||
-    hubsResult.isLoading || frshResult.isLoading;
+    nowResult.isLoading || crmResult.isLoading ||
+    hubsResult.isLoading || frshResult.isLoading ||
+    wdayResult.isLoading || ddogResult.isLoading;
   const error =
-    nowResult.error || crmResult.error || mndyResult.error ||
-    hubsResult.error || frshResult.error;
+    nowResult.error || crmResult.error ||
+    hubsResult.error || frshResult.error ||
+    wdayResult.error || ddogResult.error;
 
-  if (!nowResult.data || !crmResult.data || !mndyResult.data ||
-      !hubsResult.data || !frshResult.data) {
+  if (!nowResult.data || !crmResult.data ||
+      !hubsResult.data || !frshResult.data ||
+      !wdayResult.data || !ddogResult.data) {
     return { data: SAAS_DATA, isLoading, error };
   }
 
@@ -48,29 +71,31 @@ export function useSaaSData(): UseSaaSDataResult {
 
   const nowMap = toMap(nowResult.data);
   const crmMap = toMap(crmResult.data);
-  const mndyMap = toMap(mndyResult.data);
   const hubsMap = toMap(hubsResult.data);
   const frshMap = toMap(frshResult.data);
+  const wdayMap = toMap(wdayResult.data);
+  const ddogMap = toMap(ddogResult.data);
 
   // Collect all unique dates
   const allDates = new Set<string>();
-  [nowResult.data, crmResult.data, mndyResult.data, hubsResult.data, frshResult.data]
+  [nowResult.data, crmResult.data, hubsResult.data, frshResult.data, wdayResult.data, ddogResult.data]
     .forEach((series) => series.forEach((d) => allDates.add(d.date)));
 
   const sortedDates = [...allDates].sort();
 
   const merged: SaaSDataPoint[] = sortedDates.map((date) => ({
     date: dbDateToQuarterLabel(date),
-    servicenow: nowMap.get(date) || 0,
-    salesforce: crmMap.get(date) || 0,
-    monday: mndyMap.get(date) || 0,
-    hubspot: hubsMap.get(date) || 0,
-    freshworks: frshMap.get(date) || 0,
+    servicenow: nowMap.get(date) ?? null,
+    salesforce: crmMap.get(date) ?? null,
+    hubspot: hubsMap.get(date) ?? null,
+    freshworks: frshMap.get(date) ?? null,
+    workday: wdayMap.get(date) ?? null,
+    datadog: ddogMap.get(date) ?? null,
   }));
 
   if (merged.length === 0) {
-    return { data: SAAS_DATA, isLoading, error };
+    return { data: padSaaSToEnd(SAAS_DATA), isLoading, error };
   }
 
-  return { data: merged, isLoading, error };
+  return { data: padSaaSToEnd(merged), isLoading, error };
 }

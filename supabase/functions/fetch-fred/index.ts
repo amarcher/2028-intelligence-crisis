@@ -10,6 +10,8 @@ const FRED_SERIES = [
   'UNRATE', 'JTSJOL', 'ICSA', 'PSAVERT', 'M2V', 'UMCSENT',
   'DGS10', 'SP500', 'DRCCLACBS', 'DRSFRMACBS', 'CES5000000001',
   'USINFO', 'PRS85006173', 'PCE',
+  'LES1252881600Q', 'W006RC1Q027SBEA',
+  'OPHNFB', 'A191RL1Q225SBEA', 'CSUSHPISA',
 ];
 
 interface FredObservation {
@@ -46,6 +48,9 @@ Deno.serve(async (req: Request) => {
       // No body or invalid JSON — fetch all series
     }
 
+    // Daily series need weekly aggregation + longer history
+    const DAILY_SERIES = new Set(['DGS10', 'SP500']);
+
     const results: Record<string, number> = {};
 
     for (const seriesId of seriesToFetch) {
@@ -54,7 +59,14 @@ Deno.serve(async (req: Request) => {
       url.searchParams.set('api_key', fredApiKey);
       url.searchParams.set('file_type', 'json');
       url.searchParams.set('sort_order', 'desc');
-      url.searchParams.set('limit', '120'); // ~10 years of monthly data
+
+      if (DAILY_SERIES.has(seriesId)) {
+        url.searchParams.set('frequency', 'wef'); // aggregate to weekly (Friday)
+        url.searchParams.set('observation_start', '2020-01-01');
+        url.searchParams.set('limit', '500');
+      } else {
+        url.searchParams.set('limit', '120'); // ~10 years of monthly data
+      }
 
       const response = await fetch(url.toString());
       if (!response.ok) {

@@ -45,7 +45,7 @@ export default function Header() {
         >
           a February 2026 macro scenario
         </a>{' '}
-        against live data. Each section tracks one link in the predicted causal chain.
+        against live data.<br />Each section tracks one link in the predicted causal chain.
       </p>
 
       {/* Chain nav buttons */}

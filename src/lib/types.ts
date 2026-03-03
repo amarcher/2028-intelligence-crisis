@@ -1,15 +1,16 @@
 export interface DataPoint {
   date: string;
-  value: number;
+  value: number | null;
 }
 
 export interface SaaSDataPoint {
   date: string;
-  servicenow: number;
-  salesforce: number;
-  monday: number;
-  hubspot: number;
-  freshworks: number;
+  servicenow: number | null;
+  salesforce: number | null;
+  hubspot: number | null;
+  freshworks: number | null;
+  workday: number | null;
+  datadog: number | null;
 }
 
 export interface InferenceCostPoint {
@@ -21,8 +22,8 @@ export interface InferenceCostPoint {
 
 export interface LayoffDataPoint {
   date: string;
-  count: number;
-  workers: number;
+  count: number | null;
+  workers: number | null;
 }
 
 export interface Prediction {
@@ -40,4 +41,17 @@ export interface DelinquencyDataPoint {
   date: string;
   cc: number;
   mortgage: number | undefined;
+}
+
+export interface ArticleClaim {
+  id: string;
+  section: 'ai' | 'saas' | 'labor' | 'consumer' | 'financial';
+  claim: string;
+  metric?: string;
+  direction?: 'above' | 'below';
+  threshold?: number;
+  thresholdLabel?: string;
+  targetDate?: string;
+  verdict: VerdictType;
+  notes?: string;
 }

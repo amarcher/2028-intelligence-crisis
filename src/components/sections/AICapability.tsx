@@ -8,7 +8,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { COLORS } from '../../lib/constants';
+import { COLORS, getMilestoneX, MILESTONE_LABEL, MILESTONE_STROKE } from '../../lib/constants';
 import { INFERENCE_COST } from '../../lib/mockData';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
@@ -16,6 +16,8 @@ import ChartSection from '../ui/ChartSection';
 import CustomTooltip from '../ui/CustomTooltip';
 
 export default function AICapability() {
+  const milestoneX = getMilestoneX(INFERENCE_COST);
+
   return (
     <div id="section-ai">
       <SectionCard
@@ -26,9 +28,9 @@ export default function AICapability() {
         accentColor={COLORS.purple}
       >
         <div className="grid grid-cols-3 gap-2.5 mb-4 max-md:grid-cols-1">
-          <MiniStat label="GPT-4 COST/1M TKN" value="$0.60" change="-99% since launch" positive />
-          <MiniStat label="CLAUDE COST/1M" value="$0.80" change="-97% since launch" positive />
-          <MiniStat label="SWE-BENCH BEST" value="72%" change="+40pp in 12mo" positive />
+          <MiniStat label="GPT-4 COST/1M TKN" value="$0.60" change="-99% — enabling disruption" signal="alarming" />
+          <MiniStat label="CLAUDE COST/1M" value="$0.80" change="-97% — enabling disruption" signal="alarming" />
+          <MiniStat label="SWE-BENCH BEST" value="72%" change="+40pp in 12mo — accelerating" signal="alarming" />
         </div>
         <ChartSection title="INFERENCE COST PER MILLION TOKENS (OUTPUT) — LOG SCALE COLLAPSE">
           <ResponsiveContainer>
@@ -45,6 +47,7 @@ export default function AICapability() {
               <Line type="stepAfter" dataKey="gpt4" name="GPT-4 class" stroke={COLORS.positive} strokeWidth={2} dot={{ r: 3 }} />
               <Line type="stepAfter" dataKey="claude" name="Claude class" stroke={COLORS.purple} strokeWidth={2} dot={{ r: 3 }} connectNulls />
               <ReferenceLine y={1} stroke={COLORS.accent} strokeDasharray="6 3" label={{ value: '$1 threshold', fill: COLORS.accent, fontSize: 10 }} />
+              {milestoneX && <ReferenceLine x={milestoneX} stroke={MILESTONE_STROKE} strokeDasharray="4 3" label={MILESTONE_LABEL} />}
             </ComposedChart>
           </ResponsiveContainer>
         </ChartSection>
