@@ -10,20 +10,23 @@ const LOOP_NODES: LoopNode[] = [
   { text: 'More AI investment', color: COLORS.teal, active: false, sectionId: 'ai' },
 ];
 
-const RX = 230;
-const RY = 155;
+const R = 180; // single radius for a circle
 const NODE_W = 140;
 const NODE_H = 36;
-const W = RX * 2 + NODE_W + 20;
-const H = RY * 2 + NODE_H + 40;
+const W = R * 2 + NODE_W + 40;
+const H = R * 2 + NODE_H + 40;
 const CX = W / 2;
 const CY = H / 2;
 
+function nodeAngle(i: number, total: number) {
+  return ((2 * Math.PI) / total) * i - Math.PI / 2;
+}
+
 function nodePos(i: number, total: number) {
-  const angle = ((2 * Math.PI) / total) * i - Math.PI / 2;
+  const angle = nodeAngle(i, total);
   return {
-    x: CX + RX * Math.cos(angle),
-    y: CY + RY * Math.sin(angle),
+    x: CX + R * Math.cos(angle),
+    y: CY + R * Math.sin(angle),
   };
 }
 
@@ -37,7 +40,7 @@ function rectEdge(cx: number, cy: number, dx: number, dy: number) {
   return { x: cx + dx * s, y: cy + dy * s };
 }
 
-function curvedArrow(i: number, next: number, total: number) {
+function arrowPath(i: number, next: number, total: number) {
   const from = nodePos(i, total);
   const to = nodePos(next, total);
 
@@ -52,27 +55,20 @@ function curvedArrow(i: number, next: number, total: number) {
   let end: { x: number; y: number };
 
   if (i === 0) {
-    // Exiting top node: from right side
     start = { x: from.x + NODE_W / 2, y: from.y };
   } else {
     start = rectEdge(from.x, from.y, ux, uy);
   }
 
   if (next === 0) {
-    // Entering top node: to left side
     end = { x: to.x - NODE_W / 2, y: to.y };
   } else {
     end = rectEdge(to.x, to.y, -ux, -uy);
   }
 
-  // Curve outward from center (right-hand normal for clockwise flow)
-  const mx = (start.x + end.x) / 2;
-  const my = (start.y + end.y) / 2;
-  const bulge = 30;
-  const cx = mx + uy * bulge;
-  const cy = my + (-ux) * bulge;
-
-  return { x1: start.x, y1: start.y, x2: end.x, y2: end.y, cx, cy };
+  // Use SVG arc that follows the circle: A rx ry rotation large-arc sweep x y
+  // sweep=1 for clockwise, large-arc=0 for minor arc (<180°)
+  return `M ${start.x} ${start.y} A ${R} ${R} 0 0 1 ${end.x} ${end.y}`;
 }
 
 function scrollToSection(sectionId: string) {
@@ -120,14 +116,14 @@ export default function FeedbackLoop() {
             </marker>
           </defs>
 
-          {/* Curved arrow paths */}
+          {/* Arc arrow paths following the circle */}
           {LOOP_NODES.map((_, i) => {
             const next = (i + 1) % n;
-            const a = curvedArrow(i, next, n);
+            const d = arrowPath(i, next, n);
             return (
               <path
                 key={`arrow-${i}`}
-                d={`M ${a.x1} ${a.y1} Q ${a.cx} ${a.cy} ${a.x2} ${a.y2}`}
+                d={d}
                 fill="none"
                 stroke={COLORS.textDim}
                 strokeWidth={1.5}

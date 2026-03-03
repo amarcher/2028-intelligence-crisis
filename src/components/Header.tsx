@@ -75,12 +75,6 @@ export default function Header() {
             </button>
           </span>
         ))}
-        <span
-          className="text-sm font-mono"
-          style={{ color: COLORS.textDim }}
-        >
-          ↻
-        </span>
       </div>
     </header>
   );
