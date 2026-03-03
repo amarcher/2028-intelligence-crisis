@@ -66,7 +66,7 @@ export function useSaaSData(): UseSaaSDataResult {
   }
 
   // Build lookup maps by date
-  const toMap = (data: { date: string; value: number }[]) =>
+  const toMap = (data: { date: string; value: number | null }[]) =>
     new Map(data.map((d) => [d.date, d.value]));
 
   const nowMap = toMap(nowResult.data);

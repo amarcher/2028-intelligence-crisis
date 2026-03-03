@@ -48,7 +48,7 @@ export function useEconomicData(
   const hasData = supabaseResult.data && supabaseResult.data.length > 0;
 
   return {
-    data: padToArticleEnd(hasData ? supabaseResult.data : (MOCK_DATA[mockKey] || [])),
+    data: padToArticleEnd(hasData ? supabaseResult.data! : (MOCK_DATA[mockKey] || [])),
     isLoading: false,
     error: supabaseResult.error,
     isMock: !hasData,

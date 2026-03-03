@@ -33,7 +33,7 @@ export const MOCK_DATA: Record<string, DataPoint[]> = {
   unemployment: generateMockSeries('unemployment', '2023-01', 38, 3.7, 0.02, 0.15),
   jolts: generateMockSeries('jolts', '2023-01', 38, 8900, -90, 200).map((d) => ({
     ...d,
-    value: Math.round(d.value),
+    value: Math.round(d.value!),
   })),
   initial_claims: generateMockSeries('claims', '2024-01', 100, 215000, 600, 12000)
     .map((d, i) => {
@@ -42,7 +42,7 @@ export const MOCK_DATA: Record<string, DataPoint[]> = {
       const y = dt.getUTCFullYear();
       const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
       const day = String(dt.getUTCDate()).padStart(2, '0');
-      return { date: `${y}-${m}-${day}`, value: Math.round(d.value) };
+      return { date: `${y}-${m}-${day}`, value: Math.round(d.value!) };
     })
     .filter((_, i) => i % 4 === 0),
   savings_rate: generateMockSeries('savings', '2023-01', 38, 4.1, 0.04, 0.3),
@@ -51,24 +51,24 @@ export const MOCK_DATA: Record<string, DataPoint[]> = {
   labor_share: generateMockSeries('labor_share', '2022-01', 48, 58.5, -0.15, 0.4),
   treasury_10y: generateMockSeries('10y', '2020-01', 74, 1.8, 0.04, 0.15),
   tech_employment: generateMockSeries('tech_emp', '2023-01', 38, 3200, -8, 15).map(
-    (d) => ({ ...d, value: Math.round(d.value) })
+    (d) => ({ ...d, value: Math.round(d.value!) })
   ),
   cc_delinquency: generateMockSeries('cc_delinq', '2022-01', 48, 2.1, 0.04, 0.1),
   mortgage_delinquency: generateMockSeries('mtg_delinq', '2022-01', 48, 1.7, 0.02, 0.08),
   sp500: generateMockSeries('sp500', '2020-01', 74, 3250, 40, 100).map((d) => ({
     ...d,
-    value: Math.round(d.value),
+    value: Math.round(d.value!),
   })),
   real_wage: generateMockSeries('real_wage', '2022-01', 48, 365, -1.2, 4),
   fed_receipts: generateMockSeries('fed_receipts', '2022-01', 48, 4800, -15, 80).map((d) => ({
     ...d,
-    value: Math.round(d.value),
+    value: Math.round(d.value!),
   })),
   output_per_hour: generateMockSeries('output_per_hour', '2022-01', 48, 108, 0.6, 1.2),
   real_gdp_growth: generateMockSeries('real_gdp_growth', '2022-01', 48, 2.5, 0.08, 1.5),
   case_shiller_national: generateMockSeries('case_shiller', '2022-01', 48, 260, 2.5, 5).map((d) => ({
     ...d,
-    value: Math.round(d.value * 10) / 10,
+    value: Math.round(d.value! * 10) / 10,
   })),
 };
 

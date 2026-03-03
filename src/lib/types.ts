@@ -39,8 +39,8 @@ export type VerdictType = 'confirmed' | 'trending' | 'early' | 'wrong';
 
 export interface DelinquencyDataPoint {
   date: string;
-  cc: number;
-  mortgage: number | undefined;
+  cc: number | null;
+  mortgage: number | null | undefined;
 }
 
 export interface ArticleClaim {
