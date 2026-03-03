@@ -10,12 +10,14 @@ import {
   Legend,
 } from 'recharts';
 import { COLORS } from '../../lib/constants';
-import { SAAS_DATA } from '../../lib/mockData';
+import { useSaaSData } from '../../hooks/useSaaSData';
 import SectionCard from '../ui/SectionCard';
 import ChartSection from '../ui/ChartSection';
 import CustomTooltip from '../ui/CustomTooltip';
 
 export default function SaaSDisruption() {
+  const saas = useSaaSData();
+
   return (
     <div id="section-saas">
       <SectionCard
@@ -25,9 +27,9 @@ export default function SaaSDisruption() {
         verdict="trending"
         accentColor={COLORS.blue}
       >
-        <ChartSection title="YoY REVENUE GROWTH (%) — PUBLIC SAAS BASKET" height={260} mock>
+        <ChartSection title="YoY REVENUE GROWTH (%) — PUBLIC SAAS BASKET" height={260}>
           <ResponsiveContainer>
-            <LineChart data={SAAS_DATA}>
+            <LineChart data={saas.data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: COLORS.textDim }} />
               <YAxis tick={{ fontSize: 10, fill: COLORS.textDim }} tickFormatter={(v: number) => `${v}%`} />

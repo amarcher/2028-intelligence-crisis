@@ -14,16 +14,16 @@ export default function Methodology() {
           METHODOLOGY &amp; DATA SOURCES
         </div>
         <p className="m-0 mb-2">
-          Economic data is pulled live from FRED and updated daily. Charts marked <span className="font-mono" style={{ color: COLORS.textDim }}>MOCK DATA</span> use manually curated or representative values pending automated data sources.
+          Economic data is pulled live from FRED and SEC EDGAR. Layoff and AI pricing data is manually curated from published sources.
         </p>
         <div className="font-mono text-[11px]" style={{ color: COLORS.text }}>
           <span style={{ color: COLORS.blue }}>FRED API</span> <span style={{ color: COLORS.positive }}>(live)</span> — BLS employment, JOLTS, unemployment, savings rate, consumer sentiment, Treasury yields, delinquency rates
           <br />
-          <span style={{ color: COLORS.purple }}>Layoffs.fyi</span> <span style={{ color: COLORS.textDim }}>(manual)</span> — Tech layoff tracking
+          <span style={{ color: COLORS.purple }}>Layoffs.fyi</span> <span style={{ color: COLORS.positive }}>(curated)</span> — Tech layoff tracking
           <br />
-          <span style={{ color: COLORS.warning }}>SEC EDGAR</span> <span style={{ color: COLORS.textDim }}>(manual)</span> — SaaS company quarterly revenue growth
+          <span style={{ color: COLORS.warning }}>SEC EDGAR</span> <span style={{ color: COLORS.positive }}>(live)</span> — SaaS company quarterly revenue growth
           <br />
-          <span style={{ color: COLORS.accent }}>Public API pricing</span> <span style={{ color: COLORS.textDim }}>(manual)</span> — OpenAI, Anthropic published model pricing
+          <span style={{ color: COLORS.accent }}>Public API pricing</span> <span style={{ color: COLORS.positive }}>(curated)</span> — OpenAI, Anthropic published model pricing
         </div>
         <p className="mt-3 mb-0 italic">
           Verdicts are editorial assessments updated as new data becomes available.

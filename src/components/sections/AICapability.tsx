@@ -30,7 +30,7 @@ export default function AICapability() {
           <MiniStat label="CLAUDE COST/1M" value="$0.80" change="-97% since launch" positive />
           <MiniStat label="SWE-BENCH BEST" value="72%" change="+40pp in 12mo" positive />
         </div>
-        <ChartSection title="INFERENCE COST PER MILLION TOKENS (OUTPUT) — LOG SCALE COLLAPSE" mock>
+        <ChartSection title="INFERENCE COST PER MILLION TOKENS (OUTPUT) — LOG SCALE COLLAPSE">
           <ResponsiveContainer>
             <ComposedChart data={INFERENCE_COST}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />

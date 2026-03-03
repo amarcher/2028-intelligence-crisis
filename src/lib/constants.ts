@@ -46,6 +46,14 @@ export const FRED_SERIES = {
   information_employment: 'USINFO',
 } as const;
 
+export const SAAS_SERIES = {
+  servicenow: 'saas_NOW',
+  salesforce: 'saas_CRM',
+  monday: 'saas_MNDY',
+  hubspot: 'saas_HUBS',
+  freshworks: 'saas_FRSH',
+} as const;
+
 export const SECTIONS = [
   { id: 'ai', label: 'AI Capability', color: COLORS.purple },
   { id: 'saas', label: 'SaaS Disruption', color: COLORS.blue },

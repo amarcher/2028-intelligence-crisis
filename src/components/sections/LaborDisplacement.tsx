@@ -38,7 +38,7 @@ export default function LaborDisplacement() {
           <MiniStat label="INFO SECTOR JOBS" value="3.05M" change="-2.1% from peak" />
         </div>
 
-        <ChartSection title="TECH LAYOFFS — QUARTERLY (LAYOFFS.FYI)" height={200} mock>
+        <ChartSection title="TECH LAYOFFS — QUARTERLY (LAYOFFS.FYI)" height={200}>
           <ResponsiveContainer>
             <BarChart data={LAYOFFS_DATA}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.chartGrid} />
