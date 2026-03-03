@@ -6,12 +6,12 @@ const LOOP_NODES: LoopNode[] = [
   { text: 'AI improves', color: COLORS.purple, active: true, sectionId: 'ai' },
   { text: 'Companies cut jobs', color: COLORS.accent, active: false, sectionId: 'labor' },
   { text: 'Workers spend less', color: COLORS.warning, active: false, sectionId: 'consumer' },
-  { text: 'Companies revenues decline', color: COLORS.blue, active: false, sectionId: 'saas' },
+  { text: 'Revenues decline', color: COLORS.blue, active: false, sectionId: 'saas' },
   { text: 'More AI investment', color: COLORS.teal, active: false, sectionId: 'ai' },
 ];
 
 const R = 175;
-const NODE_W = 165;
+const NODE_W = 140;
 const NODE_H = 36;
 const W = R * 2 + NODE_W + 40;
 const H = R * 2 + NODE_H + 40;
