@@ -42,7 +42,7 @@ export default function SaaSDisruption() {
             </LineChart>
           </ResponsiveContainer>
         </ChartSection>
-        <div className="text-xs mt-3 leading-relaxed" style={{ color: COLORS.textDim }}>
+        <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
           <strong style={{ color: COLORS.blue }}>Status:</strong> Revenue growth is decelerating across the SaaS basket, but not collapsing. The &ldquo;long tail&rdquo; (Monday, Asana, Freshworks) is slowing faster than systems of record. The article predicted ServiceNow ACV growth decelerating to 14% by Q3&apos;26 — current trajectory puts them in the high teens. Close, but not there yet.
         </div>
       </SectionCard>

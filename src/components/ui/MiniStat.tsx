@@ -9,7 +9,7 @@ interface MiniStatProps {
 
 export default function MiniStat({ label, value, change, positive }: MiniStatProps) {
   return (
-    <div className="p-3 px-4 rounded-md border" style={{ background: COLORS.bg, borderColor: COLORS.border }}>
+    <div className="p-3 px-4 rounded-md border min-w-[140px]" style={{ background: COLORS.bg, borderColor: COLORS.border }}>
       <div className="text-[10px] tracking-[0.08em] font-mono mb-1" style={{ color: COLORS.textDim }}>
         {label}
       </div>

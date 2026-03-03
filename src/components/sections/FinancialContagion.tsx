@@ -73,7 +73,7 @@ export default function FinancialContagion() {
           </ResponsiveContainer>
         </ChartSection>
 
-        <div className="text-xs mt-3 leading-relaxed" style={{ color: COLORS.textDim }}>
+        <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
           <strong style={{ color: COLORS.teal }}>Status:</strong> Credit card delinquencies are rising (but from COVID lows — this is normalization, not crisis). Mortgage delinquencies remain near historic lows. No sign of the private credit contagion or PE software defaults the article describes. The &ldquo;daisy chain&rdquo; has not begun.
         </div>
       </SectionCard>

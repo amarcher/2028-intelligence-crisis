@@ -20,7 +20,7 @@ export default function Header() {
       >
         CITRINI RESEARCH — FORECAST TRACKER
       </div>
-      <h1 className="text-[clamp(28px,5vw,44px)] font-black leading-[1.1] tracking-tight m-0 font-display relative">
+      <h1 className="text-[clamp(28px,5vw,44px)] font-black leading-[1.1] tracking-[-0.03em] m-0 font-display relative">
         <span
           className="inline-block transition-all duration-50"
           style={{

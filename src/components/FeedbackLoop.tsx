@@ -49,7 +49,7 @@ export default function FeedbackLoop() {
           </span>
         ))}
       </div>
-      <div className="mt-4 text-xs leading-relaxed" style={{ color: COLORS.textDim }}>
+      <div className="mt-4 text-xs leading-[1.6]" style={{ color: COLORS.textDim }}>
         <span style={{ color: COLORS.purple }}>■</span> Active &nbsp;
         <span style={{ color: COLORS.textDim }}>□</span> Not yet triggered
       </div>

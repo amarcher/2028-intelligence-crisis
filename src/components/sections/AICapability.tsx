@@ -48,7 +48,7 @@ export default function AICapability() {
             </ComposedChart>
           </ResponsiveContainer>
         </ChartSection>
-        <div className="text-xs mt-3 leading-relaxed" style={{ color: COLORS.textDim }}>
+        <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
           <strong style={{ color: COLORS.purple }}>Status:</strong> Inference costs have collapsed 99%+ in under 3 years. Agentic coding tools (Claude Code, Cursor, Codex) are mainstream among developers.
           The article&apos;s core catalyst — AI capability making build-vs-buy viable — is clearly underway.
         </div>

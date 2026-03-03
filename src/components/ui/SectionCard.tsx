@@ -36,7 +36,7 @@ export default function SectionCard({ number, title, quote, verdict, accentColor
               CHAIN LINK {number}
             </span>
             <h2
-              className="text-xl font-extrabold mt-1 tracking-tight font-display"
+              className="text-xl font-extrabold mt-1 tracking-[-0.02em] font-display"
               style={{ color: COLORS.textBright }}
             >
               {title}
@@ -47,7 +47,7 @@ export default function SectionCard({ number, title, quote, verdict, accentColor
 
         {quote && (
           <div
-            className="pl-3.5 my-3 mb-[18px] text-[12.5px] leading-relaxed italic"
+            className="pl-3.5 my-3 mb-[18px] text-[12.5px] leading-[1.6] italic"
             style={{
               borderLeft: `2px solid ${color}40`,
               color: COLORS.textDim,

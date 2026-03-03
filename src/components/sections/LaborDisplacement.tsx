@@ -76,7 +76,7 @@ export default function LaborDisplacement() {
           </ResponsiveContainer>
         </ChartSection>
 
-        <div className="text-xs mt-3 leading-relaxed" style={{ color: COLORS.textDim }}>
+        <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
           <strong style={{ color: COLORS.accent }}>Status:</strong> Tech layoffs have declined from 2023 peak but remain elevated. JOLTS openings are trending down but well above the article&apos;s 5.5M threshold. Unemployment remains historically low. The &ldquo;displacement spiral&rdquo; hasn&apos;t materialized yet — this is the key section to watch.
         </div>
       </SectionCard>

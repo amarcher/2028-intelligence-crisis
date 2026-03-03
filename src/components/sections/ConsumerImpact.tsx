@@ -59,7 +59,7 @@ export default function ConsumerImpact() {
           </ResponsiveContainer>
         </ChartSection>
 
-        <div className="text-xs mt-3 leading-relaxed" style={{ color: COLORS.textDim }}>
+        <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
           <strong style={{ color: COLORS.warning }}>Status:</strong> Consumer confidence has been weak (tariff-driven, not AI-driven). Savings rates remain low — no sign yet of the precautionary savings spike the article predicts from white-collar fear. Velocity of money is recovering post-COVID, not flatlined. Too early for the &ldquo;Ghost GDP&rdquo; dynamic.
         </div>
       </SectionCard>
