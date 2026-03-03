@@ -6,12 +6,12 @@ const LOOP_NODES: LoopNode[] = [
   { text: 'AI improves', color: COLORS.purple, active: true, sectionId: 'ai' },
   { text: 'Companies cut jobs', color: COLORS.accent, active: false, sectionId: 'labor' },
   { text: 'Workers spend less', color: COLORS.warning, active: false, sectionId: 'consumer' },
-  { text: 'Revenue pressure', color: COLORS.blue, active: false, sectionId: 'saas' },
+  { text: 'Companies revenues decline', color: COLORS.blue, active: false, sectionId: 'saas' },
   { text: 'More AI investment', color: COLORS.teal, active: false, sectionId: 'ai' },
 ];
 
-const R = 180; // single radius for a circle
-const NODE_W = 140;
+const R = 175;
+const NODE_W = 165;
 const NODE_H = 36;
 const W = R * 2 + NODE_W + 40;
 const H = R * 2 + NODE_H + 40;
@@ -43,31 +43,19 @@ function rectEdge(cx: number, cy: number, dx: number, dy: number) {
 function arrowPath(i: number, next: number, total: number) {
   const from = nodePos(i, total);
   const to = nodePos(next, total);
+  const aFrom = nodeAngle(i, total);
+  const aTo = nodeAngle(next, total);
 
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  const ux = dx / dist;
-  const uy = dy / dist;
+  // Use circle-tangent directions so start/end points sit on the circle path.
+  // Clockwise tangent at angle θ: (-sin θ, cos θ)
+  const exitDir = { x: -Math.sin(aFrom), y: Math.cos(aFrom) };
+  const entryDir = { x: Math.sin(aTo), y: -Math.cos(aTo) };
 
-  // For the top node (index 0), force arrows to connect at left/right sides
-  let start: { x: number; y: number };
-  let end: { x: number; y: number };
+  const start = rectEdge(from.x, from.y, exitDir.x, exitDir.y);
+  const end = rectEdge(to.x, to.y, entryDir.x, entryDir.y);
 
-  if (i === 0) {
-    start = { x: from.x + NODE_W / 2, y: from.y };
-  } else {
-    start = rectEdge(from.x, from.y, ux, uy);
-  }
-
-  if (next === 0) {
-    end = { x: to.x - NODE_W / 2, y: to.y };
-  } else {
-    end = rectEdge(to.x, to.y, -ux, -uy);
-  }
-
-  // Use SVG arc that follows the circle: A rx ry rotation large-arc sweep x y
-  // sweep=1 for clockwise, large-arc=0 for minor arc (<180°)
+  // SVG arc: A rx ry rotation large-arc-flag sweep-flag x y
+  // sweep=1 for clockwise, large-arc=0 for minor arc
   return `M ${start.x} ${start.y} A ${R} ${R} 0 0 1 ${end.x} ${end.y}`;
 }
 
