@@ -49,33 +49,38 @@ export default function Header() {
       </p>
 
       {/* Chain nav buttons */}
-      <div className="flex justify-center gap-0.5 mt-7 flex-wrap">
+      <div className="flex justify-center items-center gap-2 mt-7 flex-wrap">
         {SECTIONS.map((s, i) => (
-          <button
-            key={s.id}
-            onClick={() => {
-              document.getElementById(`section-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }}
-            className="text-[10px] font-bold tracking-[0.06em] font-mono cursor-pointer py-1.5 px-3.5 relative transition-all duration-200"
-            style={{
-              background: `${s.color}20`,
-              border: `1px solid ${s.color}40`,
-              color: s.color,
-              borderRadius:
-                i === 0 ? '4px 0 0 4px' : i === SECTIONS.length - 1 ? '0 4px 4px 0' : '0',
-            }}
-          >
+          <span key={s.id} className="contents">
             {i > 0 && (
               <span
-                className="absolute -left-1.5 top-1/2 -translate-y-1/2 text-[8px]"
+                className="text-sm font-mono"
                 style={{ color: COLORS.textDim }}
               >
                 →
               </span>
             )}
-            {s.label}
-          </button>
+            <button
+              onClick={() => {
+                document.getElementById(`section-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="text-[10px] font-bold tracking-[0.06em] font-mono cursor-pointer py-1.5 px-3.5 rounded transition-all duration-200"
+              style={{
+                background: `${s.color}20`,
+                border: `1px solid ${s.color}40`,
+                color: s.color,
+              }}
+            >
+              {s.label}
+            </button>
+          </span>
         ))}
+        <span
+          className="text-sm font-mono"
+          style={{ color: COLORS.textDim }}
+        >
+          ↻
+        </span>
       </div>
     </header>
   );

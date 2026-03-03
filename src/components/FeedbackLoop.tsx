@@ -47,16 +47,30 @@ function curvedArrow(i: number, next: number, total: number) {
   const ux = dx / dist;
   const uy = dy / dist;
 
-  // Start/end at rectangle edges
-  const start = rectEdge(from.x, from.y, ux, uy);
-  const end = rectEdge(to.x, to.y, -ux, -uy);
+  // For the top node (index 0), force arrows to connect at left/right sides
+  let start: { x: number; y: number };
+  let end: { x: number; y: number };
+
+  if (i === 0) {
+    // Exiting top node: from right side
+    start = { x: from.x + NODE_W / 2, y: from.y };
+  } else {
+    start = rectEdge(from.x, from.y, ux, uy);
+  }
+
+  if (next === 0) {
+    // Entering top node: to left side
+    end = { x: to.x - NODE_W / 2, y: to.y };
+  } else {
+    end = rectEdge(to.x, to.y, -ux, -uy);
+  }
 
   // Curve outward from center (right-hand normal for clockwise flow)
   const mx = (start.x + end.x) / 2;
   const my = (start.y + end.y) / 2;
   const bulge = 30;
-  const cx = mx + (uy / 1) * bulge;  // right-hand perpendicular: (uy, -ux)
-  const cy = my + (-ux / 1) * bulge;
+  const cx = mx + uy * bulge;
+  const cy = my + (-ux) * bulge;
 
   return { x1: start.x, y1: start.y, x2: end.x, y2: end.y, cx, cy };
 }
