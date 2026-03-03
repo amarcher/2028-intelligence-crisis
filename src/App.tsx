@@ -1,3 +1,4 @@
+import { Analytics } from '@vercel/analytics/react';
 import Dashboard from './Dashboard';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
       <div className="relative z-[1] max-w-[900px] mx-auto px-5 pt-10 pb-20">
         <Dashboard />
       </div>
+      <Analytics />
     </div>
   );
 }
