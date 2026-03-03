@@ -35,16 +35,9 @@ export default function Methodology() {
         className="text-center mt-10 text-[11px] font-mono"
         style={{ color: COLORS.textDim }}
       >
-        Original article:{' '}
-        <a
-          href="https://www.citriniresearch.com/p/2028gic"
-          className="no-underline"
-          style={{ color: COLORS.accent }}
-        >
-          Citrini Research — The 2028 Global Intelligence Crisis
-        </a>
-        <br />
-        <span className="text-[10px] opacity-50">Dashboard by Archer • Last updated: Feb 2026</span>
+        <span className="text-[10px] opacity-50">
+          An independent tracker. Not affiliated with the original authors.
+        </span>
       </div>
     </>
   );

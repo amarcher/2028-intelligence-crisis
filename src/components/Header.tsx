@@ -13,12 +13,12 @@ export default function Header() {
   }, []);
 
   return (
-    <header className="mb-12 text-center">
+    <header className="mb-14 text-center">
       <div
         className="text-[10px] tracking-[0.25em] font-bold font-mono mb-3"
         style={{ color: COLORS.accent }}
       >
-        CITRINI RESEARCH — FORECAST TRACKER
+        INDEPENDENT FORECAST TRACKER
       </div>
       <h1 className="text-[clamp(28px,5vw,44px)] font-black leading-[1.1] tracking-[-0.03em] m-0 font-display relative">
         <span
@@ -35,11 +35,17 @@ export default function Header() {
         <span style={{ color: COLORS.accent }}>INTELLIGENCE CRISIS</span>
       </h1>
       <p
-        className="text-sm max-w-[560px] mx-auto mt-4 leading-[1.7]"
+        className="text-sm max-w-[500px] mx-auto mt-5 leading-[1.7] text-center"
         style={{ color: COLORS.textDim }}
       >
-        Tracking the veracity of Citrini Research&apos;s February 2026 macro scenario in real time.
-        Each section maps to a link in their predicted causal chain.
+        Fact-checking{' '}
+        <a
+          href="https://www.citriniresearch.com/p/2028gic"
+          style={{ color: COLORS.text, textDecoration: 'underline', textUnderlineOffset: '2px' }}
+        >
+          a February 2026 macro scenario
+        </a>{' '}
+        against live data. Each section tracks one link in the predicted causal chain.
       </p>
 
       {/* Chain nav buttons */}

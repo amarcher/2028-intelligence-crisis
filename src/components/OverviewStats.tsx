@@ -72,7 +72,7 @@ export default function OverviewStats() {
   const treasuryYoy = yoyChange(treasury.data);
 
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3 mb-9">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3 mb-12">
       <MiniStat label="UNEMPLOYMENT" value={formatPct(unemployment.data)} change={unempYoy?.text} positive={unempYoy?.positive} />
       <MiniStat label="JOLTS OPENINGS" value={formatK(jolts.data)} change={joltsYoy?.text} positive={joltsYoy?.positive} />
       <MiniStat label="INITIAL CLAIMS" value={formatK(claims.data)} change={claimsYoy?.text} positive={claimsYoy?.positive} />

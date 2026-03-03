@@ -14,7 +14,7 @@ const LOOP_NODES: LoopNode[] = [
 export default function FeedbackLoop() {
   return (
     <div
-      className="rounded-lg p-7 mb-7 text-center"
+      className="rounded-lg p-7 mb-10 text-center"
       style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}` }}
     >
       <div

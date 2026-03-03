@@ -17,7 +17,7 @@ export default function SectionCard({ number, title, quote, verdict, accentColor
 
   return (
     <div
-      className="rounded-lg mb-7 overflow-hidden relative"
+      className="rounded-lg mb-10 overflow-hidden relative"
       style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}` }}
     >
       {/* Accent bar */}
