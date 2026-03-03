@@ -58,19 +58,20 @@ export const MOCK_DATA: Record<string, DataPoint[]> = {
 };
 
 export const LAYOFFS_DATA: LayoffDataPoint[] = [
-  { date: '2023-Q1', count: 168, workers: 107000 },
-  { date: '2023-Q2', count: 120, workers: 58000 },
-  { date: '2023-Q3', count: 98, workers: 42000 },
-  { date: '2023-Q4', count: 85, workers: 35000 },
-  { date: '2024-Q1', count: 130, workers: 68000 },
-  { date: '2024-Q2', count: 95, workers: 41000 },
-  { date: '2024-Q3', count: 78, workers: 32000 },
-  { date: '2024-Q4', count: 72, workers: 28000 },
-  { date: '2025-Q1', count: 110, workers: 52000 },
-  { date: '2025-Q2', count: 88, workers: 38000 },
-  { date: '2025-Q3', count: 75, workers: 30000 },
-  { date: '2025-Q4', count: 82, workers: 36000 },
-  { date: '2026-Q1', count: 95, workers: 44000 },
+  // Sources: layoffs.fyi, TrueUp, TechCrunch, DemandSage. Curated Mar 2026.
+  { date: '2023-Q1', count: 371, workers: 158314 },
+  { date: '2023-Q2', count: 330, workers: 46433 },
+  { date: '2023-Q3', count: 265, workers: 25535 },
+  { date: '2023-Q4', count: 220, workers: 33718 },
+  { date: '2024-Q1', count: 188, workers: 57149 },
+  { date: '2024-Q2', count: 155, workers: 41000 },
+  { date: '2024-Q3', count: 117, workers: 38000 },
+  { date: '2024-Q4', count: 89, workers: 15851 },
+  { date: '2025-Q1', count: 195, workers: 70892 },
+  { date: '2025-Q2', count: 225, workers: 81911 },
+  { date: '2025-Q3', count: 195, workers: 53299 },
+  { date: '2025-Q4', count: 168, workers: 39851 },
+  { date: '2026-Q1', count: 134, workers: 51446 },
 ];
 
 export const SAAS_DATA: SaaSDataPoint[] = [
@@ -89,14 +90,14 @@ export const SAAS_DATA: SaaSDataPoint[] = [
 ];
 
 export const INFERENCE_COST: InferenceCostPoint[] = [
+  // $/1M output tokens for cheapest model at GPT-4 capability level. Curated Mar 2026.
+  // Sources: OpenAI & Anthropic published pricing pages.
   { date: '2023-03', gpt4: 60, claude: null, label: 'GPT-4 launch' },
-  { date: '2023-06', gpt4: 30, claude: 32, label: '' },
-  { date: '2023-11', gpt4: 20, claude: 24, label: 'GPT-4 Turbo' },
-  { date: '2024-03', gpt4: 10, claude: 15, label: 'Claude 3' },
-  { date: '2024-06', gpt4: 5, claude: 3, label: 'GPT-4o / Sonnet' },
-  { date: '2024-10', gpt4: 2.5, claude: 3, label: '' },
-  { date: '2025-01', gpt4: 2, claude: 3, label: '' },
-  { date: '2025-06', gpt4: 1.5, claude: 2, label: 'Sonnet 4' },
-  { date: '2025-10', gpt4: 0.75, claude: 1, label: '' },
+  { date: '2023-07', gpt4: 60, claude: 24, label: 'Claude 2' },
+  { date: '2023-11', gpt4: 30, claude: 24, label: 'GPT-4 Turbo' },
+  { date: '2024-03', gpt4: 30, claude: 15, label: 'Claude 3 Sonnet' },
+  { date: '2024-06', gpt4: 15, claude: 15, label: 'GPT-4o / Sonnet 3.5' },
+  { date: '2024-10', gpt4: 0.6, claude: 0.8, label: '4o mini / Haiku 3.5' },
+  { date: '2025-06', gpt4: 0.6, claude: 0.8, label: '' },
   { date: '2026-02', gpt4: 0.6, claude: 0.8, label: 'Now' },
 ];
