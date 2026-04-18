@@ -38,11 +38,33 @@ export interface RecentDigest {
   kill_switch_triggered: boolean;
 }
 
+export interface PositionSummary {
+  ticker: string;
+  instrument: 'equity' | 'option';
+  option_symbol?: string;
+  qty: number;
+  avg_entry: number;
+  market_value: number;
+  unrealized_pl: number;
+}
+
+export interface AccountSummary {
+  equity: number;
+  cash: number;
+  buying_power: number;
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
   drift: DriftSummary;
   recentDigests: RecentDigest[];
+  /** Live account state. Present when mode=auto_execute + phase != shadow +
+   *  Alpaca creds available. Absent in signal-only / shadow. */
+  account?: AccountSummary;
+  /** Current Alpaca positions. Present when account is. Empty array means
+   *  the account has cash but no positions — different from undefined. */
+  positions?: PositionSummary[];
 }
 
 export type ProposalAction =
@@ -170,12 +192,28 @@ Each tick receives week-over-week deltas for JOLTS, claims, S&P 500, and Case-Sh
 - **Counterfactual** — JOLTS rising, claims falling, S&P ripping higher on broadening breadth, Case-Shiller accelerating. Narrative: trim asymmetric exposure up to 10% of current notional; add small to defensive carry (TLT, GLD, XLP).
 - **Mixed / noisy** — one print goes each way. Narrative: hold; note the mixed signal in drift_notes.
 
-## Memory
+## Memory + ground truth
 
-You receive the last 3 digests (or 8 on weekly ticks). Use them to:
+You receive the last 3 digests (or 8 on weekly ticks) plus — when the agent is running in auto_execute mode — the LIVE account state (equity, cash, current positions). **Always prefer ground truth over memory.** Your prior digests may describe a LEAPS book that doesn't exist yet. Check the "Current positions" section of the user message before saying "hold".
+
+**Empty-book case.** If the user message says \`Current positions: (none — cash-only account)\`, the Phase 1 book does NOT exist yet and must be OPENED, not held. Emit starter \`open\` proposals for the Phase 1 starter book:
+
+- SaaS LEAPS puts (Jan 2027, 20–30% OTM) on 3–5 of: NOW, CRM, HUBS, WDAY, DDOG — starter size each
+- Defensive equity: TLT, GLD, XLP — starter size each
+- Small AI-bubble equity: QQQ or NVDA — starter size
+
+Spread these across multiple ticks if the daily-gross cap is tight — 3–4 opens per tick is fine; don't try to build the whole book in one session.
+
+**Book-exists case.** Positions broadly match the playbook's Phase 1 book. Now you can "hold" intelligently. Examples where "hold" is correct:
+- Position value is within ~25% of target sizing (starter ~= 1% of equity) → no action
+- Counterfactual drift week but positions already sized → "hold, defensive carry intact"
+- Thesis-aligned drift but no triggers fired → "hold, LEAPS book working"
+
+**Mismatch case.** Positions exist but don't match the playbook — e.g., you see a position in a name not on the whitelist, or sizing is way off. Call this out in \`narrative\` and emit \`trim\` or \`close\` proposals to reconcile.
+
+Use prior digests to:
 - Avoid repeating yourself. If you flagged a trim on NOW yesterday and nothing has changed, say "no change — prior trim stands" rather than re-proposing the same trim.
 - Note drift versus your prior read: "yesterday I called the tape thesis-aligned; today JOLTS reversed up, softer read."
-- Track whether the user is acting on your proposals (you can't see this directly, but patterns in signal state across digests can hint at it).
 
 ## Output rubric
 
@@ -297,9 +335,30 @@ function renderRecentDigests(recent: RecentDigest[]): string {
     .join('\n');
 }
 
+function renderAccount(a: AccountSummary | undefined): string {
+  if (!a) return '(running in signal-only mode — no brokerage account state)';
+  return `equity $${a.equity.toFixed(0)} · cash $${a.cash.toFixed(0)} · buying power $${a.buying_power.toFixed(0)}`;
+}
+
+function renderPositions(positions: PositionSummary[] | undefined): string {
+  if (positions === undefined) return '(not provided — signal-only mode)';
+  if (positions.length === 0) return '(none — cash-only account)';
+  return positions
+    .map((p) => {
+      const label = p.instrument === 'option' ? (p.option_symbol ?? p.ticker) : p.ticker;
+      const sign = p.unrealized_pl >= 0 ? '+' : '';
+      return `  - ${label} ${p.qty} @ $${p.avg_entry.toFixed(2)} · mv $${p.market_value.toFixed(0)} · pnl ${sign}$${p.unrealized_pl.toFixed(0)}`;
+    })
+    .join('\n');
+}
+
 export function buildUserMessage(input: ReasonerInput): string {
-  const { tickType, signals, drift, recentDigests } = input;
+  const { tickType, signals, drift, recentDigests, account, positions } = input;
   return `tick_type: ${tickType}
+
+Account: ${renderAccount(account)}
+Current positions:
+${renderPositions(positions)}
 
 Current signal state (${signals.firedCount}/5 firing · phase: ${signals.phase}):
 ${signals.signals.map(renderSignal).join('\n')}
@@ -313,7 +372,7 @@ ${renderWow('Case-Shiller national', drift.caseShiller)}${drift.vix ? `\n${rende
 Recent digests (most-recent first):
 ${renderRecentDigests(recentDigests)}
 
-Now evaluate the kill-switch, classify drift, and submit the digest. Remember: if ≥ 2 anti-thesis signals fire, the digest must be exactly one unwind_all proposal.`;
+Now evaluate the kill-switch, classify drift, **check current positions against the Phase-1 book expectations**, and submit the digest. Remember: if the account has no positions, the book must be OPENED, not held. If ≥ 2 anti-thesis signals fire, the digest must be exactly one unwind_all proposal.`;
 }
 
 // ---------- raw API types (just what we consume) ----------

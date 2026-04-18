@@ -11,12 +11,15 @@ import { computeSignals } from '../../../src/lib/signals.ts';
 import type { DataPoint, SaaSDataPoint } from '../../../src/lib/types.ts';
 import {
   runReasoner,
+  type AccountSummary,
   type DriftSummary,
+  type PositionSummary,
   type Proposal,
   type RecentDigest,
   type TickType,
   type WowSummary,
 } from './reasoner.ts';
+import { alpacaFromEnv, getAccount, getPositions } from './alpaca.ts';
 import { deliverDigest } from './delivery.ts';
 import {
   orchestrateExecution,
@@ -95,6 +98,35 @@ Deno.serve(async (req: Request) => {
 
     const recentDigests = await loadRecentDigests(supabase, MEMORY_DEPTH[tickType]);
 
+    // In auto_execute + non-shadow phase, load Alpaca account state so the
+    // reasoner can reason about the actual book (not hallucinate from prior
+    // narratives). Best-effort — if creds are missing or Alpaca 5xxs, we
+    // fall through to signal-only reasoning without failing the tick.
+    let accountSummary: AccountSummary | undefined;
+    let positionSummaries: PositionSummary[] | undefined;
+    if (config.mode === 'auto_execute' && config.phase !== 'shadow') {
+      try {
+        const creds = alpacaFromEnv();
+        const [acct, pos] = await Promise.all([getAccount(creds), getPositions(creds)]);
+        accountSummary = {
+          equity: acct.equity,
+          cash: acct.cash,
+          buying_power: acct.buying_power,
+        };
+        positionSummaries = pos.map((p) => ({
+          ticker: p.asset_class === 'us_option' ? (p.symbol.match(/^([A-Z]{1,6})/)?.[1] ?? p.symbol) : p.symbol,
+          instrument: p.asset_class === 'us_option' ? 'option' : 'equity',
+          option_symbol: p.asset_class === 'us_option' ? p.symbol : undefined,
+          qty: p.qty,
+          avg_entry: p.avg_entry_price,
+          market_value: p.market_value,
+          unrealized_pl: p.unrealized_pl,
+        }));
+      } catch (e) {
+        console.warn('Alpaca state load failed (non-fatal):', String(e).slice(0, 200));
+      }
+    }
+
     // Snapshot lands regardless of whether the reasoner succeeds.
     const { data: snapshot, error: snapError } = await supabase
       .from('agent_snapshots')
@@ -123,6 +155,8 @@ Deno.serve(async (req: Request) => {
         signals: result,
         drift,
         recentDigests,
+        account: accountSummary,
+        positions: positionSummaries,
       });
 
       digestRow = {
