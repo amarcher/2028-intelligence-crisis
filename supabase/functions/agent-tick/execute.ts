@@ -38,6 +38,7 @@ import {
   type PriorOrderSummary,
 } from './guardrails.ts';
 import type { Proposal } from './reasoner.ts';
+import { sendApprovalAlert } from './alerts.ts';
 
 export type ExecutionConfig = GuardrailContext['config'];
 
@@ -149,13 +150,33 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
       rationale,
     });
 
+    // Alert owner immediately — phase flips and unwinds are time-sensitive.
+    // Failures are non-fatal; the approval row is already persisted.
+    const alertRes = await sendApprovalAlert({
+      kind,
+      rationale,
+      proposals: input.proposals.map((p) => ({
+        action: p.action,
+        ticker: p.ticker,
+        instrument: p.instrument,
+        expiry: p.expiry,
+        strike: p.strike,
+        size_hint: p.size_hint,
+        rationale: p.rationale,
+      })),
+      expiresIn: '24 hours',
+    });
+    if (!alertRes.ok) {
+      errors.push(`approval alert: ${alertRes.error ?? 'unknown'}`);
+    }
+
     return {
       mode: 'auto_execute',
       phase: input.config.phase,
       placed: 0,
       queued: 1,
       rejected: 0,
-      errors: [],
+      errors,
     };
   }
 
@@ -246,12 +267,31 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     }
 
     if (decision.outcome === 'requires_approval') {
+      const rationale = `${decision.reason} — notional $${decision.notional.toFixed(0)} (${decision.size_pct.toFixed(1)}% of $${account.equity.toFixed(0)} equity)`;
       await input.supa.insertApproval({
         digest_id: input.digestId,
         kind: 'oversize_ticket',
         proposals: [p],
-        rationale: `${decision.reason} — notional $${decision.notional.toFixed(0)} (${decision.size_pct.toFixed(1)}% of $${account.equity.toFixed(0)} equity)`,
+        rationale,
       });
+      // Fire-and-forget alert; don't block execution on email failures.
+      const alertRes = await sendApprovalAlert({
+        kind: 'oversize_ticket',
+        rationale,
+        proposals: [{
+          action: p.action,
+          ticker: p.ticker,
+          instrument: p.instrument,
+          expiry: p.expiry,
+          strike: p.strike,
+          size_hint: p.size_hint,
+          rationale: p.rationale,
+        }],
+        expiresIn: '24 hours',
+      });
+      if (!alertRes.ok) {
+        errors.push(`approval alert: ${alertRes.error ?? 'unknown'}`);
+      }
       queued++;
       continue;
     }
