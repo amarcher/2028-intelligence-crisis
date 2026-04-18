@@ -361,10 +361,14 @@ interface AnthropicMessagesResponse {
 async function callOnce(apiKey: string, input: ReasonerInput): Promise<ReasonerOutput> {
   const userMessage = buildUserMessage(input);
 
+  // No `thinking` field — Anthropic rejects adaptive thinking when tool_choice
+  // forces a specific tool. We need the forced tool_choice to guarantee
+  // structured output, so thinking stays off. If a future tick type needs
+  // deeper reasoning, remove the tool_choice force and rely on the prompt
+  // to get the single tool call.
   const requestBody = {
     model: MODEL,
     max_tokens: 4096,
-    thinking: { type: 'adaptive' },
     system: [
       {
         type: 'text',
