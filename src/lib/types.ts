@@ -70,6 +70,10 @@ export interface AgentProposal {
   size_hint: 'starter' | 'half' | 'full' | 'trim_third' | 'trim_half';
   rationale: string;
   urgency: 'act_today' | 'this_week' | 'waiting_for_trigger';
+  /** Populated by the Edge Function filter when a proposal violates playbook
+   *  rules (off-whitelist, near-dated SaaS short, leveraged inverse without
+   *  tactical justification). Absent when clean. */
+  filter_flags?: string[];
 }
 
 export interface AgentDigest {
