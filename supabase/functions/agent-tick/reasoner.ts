@@ -8,6 +8,7 @@
 // in the system prompt or tool schema.
 
 import type { SignalsResult, Signal } from '../../../src/lib/signals.ts';
+import { WHITELIST, annotateProposals } from './filter.ts';
 
 export type TickType = 'premarket' | 'close' | 'weekly';
 
@@ -77,6 +78,10 @@ export interface Proposal {
   size_hint: ProposalSizeHint;
   rationale: string;
   urgency: ProposalUrgency;
+  /** Populated by the soft-guardrail filter when a proposal violates the
+   *  playbook rules (off-whitelist, near-dated single-name short, etc.).
+   *  Omitted on clean proposals to keep the JSON compact. */
+  filter_flags?: string[];
 }
 
 export interface ReasonerOutput {
@@ -97,23 +102,8 @@ export interface ReasonerOutput {
 
 const MODEL = 'claude-opus-4-7';
 
-const WHITELIST = [
-  // Phase-1 longs (AI bubble ride)
-  'QQQ', 'SMH', 'IGV', 'NVDA', 'AVGO', 'ORCL', 'ANET', 'VRT', 'CEG',
-  'MSFT', 'GOOGL', 'META',
-  // Defensive carry
-  'TLT', 'GLD', 'IAU', 'XLP', 'KO', 'PG', 'COST', 'WMT',
-  // Asymmetric SaaS put thesis
-  'NOW', 'CRM', 'HUBS', 'WDAY', 'DDOG', 'FRSH',
-  // Credit + CRE shorts
-  'KRE', 'HYG', 'JNK', 'IYR', 'VNQ', 'BXP', 'SLG',
-  // Housing roll
-  'ITB', 'XHB', 'OPEN', 'Z', 'RDFN',
-  // Consumer / staffing shorts
-  'XLY', 'RH', 'W', 'CCL', 'NCLH', 'UPWK', 'FIVN',
-  // Indices + vol
-  'SPY', 'IWM', 'VIXY',
-];
+// WHITELIST is imported from filter.ts — single source of truth for both
+// the system prompt and the post-extraction guardrail filter.
 
 // ---------- static prompt (cached) ----------
 // This string is frozen. Never interpolate timestamps, tick IDs, or anything
@@ -416,11 +406,16 @@ async function callOnce(apiKey: string, input: ReasonerInput): Promise<ReasonerO
     scorecard?: Record<string, 'fired' | 'pending' | 'reversed'> | null;
   };
 
+  // Soft-guardrail filter: annotates proposals that violate playbook rules
+  // with filter_flags[]. Never drops or silently alters — always passes through
+  // so the digest UI can show what Claude tried plus why the filter flagged it.
+  const annotatedProposals = annotateProposals(out.proposals ?? []);
+
   return {
     kill_switch_triggered: out.kill_switch_triggered,
     narrative: out.narrative,
     drift_notes: out.drift_notes ?? null,
-    proposals: out.proposals ?? [],
+    proposals: annotatedProposals,
     scorecard: out.scorecard ?? null,
     usage: {
       input_tokens: body.usage.input_tokens,

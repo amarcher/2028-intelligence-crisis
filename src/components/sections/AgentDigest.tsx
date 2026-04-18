@@ -75,6 +75,23 @@ function ProposalRow({ p }: { p: AgentProposal }) {
         <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: COLORS.text }}>
           {p.rationale}
         </div>
+        {p.filter_flags && p.filter_flags.length > 0 && (
+          <div className="flex gap-1.5 mt-1.5 flex-wrap">
+            {p.filter_flags.map((flag, i) => (
+              <span
+                key={i}
+                className="text-[9px] font-mono font-bold tracking-[0.04em] px-1.5 py-[2px] rounded"
+                style={{
+                  color: COLORS.warning,
+                  background: `${COLORS.warning}18`,
+                  border: `1px solid ${COLORS.warning}40`,
+                }}
+              >
+                ⚠ {flag}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <span
         className="text-[9px] font-bold tracking-[0.08em] font-mono px-1.5 py-[2px] rounded whitespace-nowrap"
