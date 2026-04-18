@@ -391,7 +391,8 @@ function buildExecutionSupa(
       if (positions.length === 0) return;
       const rows = positions.map((p) => ({
         ticker: p.asset_class === 'us_option' ? inferUnderlying(p.symbol) : p.symbol,
-        option_symbol: p.asset_class === 'us_option' ? p.symbol : null,
+        // Empty string for equities so the composite PK (ticker, option_symbol) is stable.
+        option_symbol: p.asset_class === 'us_option' ? p.symbol : '',
         qty: p.qty,
         avg_entry: p.avg_entry_price,
         market_value: p.market_value,
