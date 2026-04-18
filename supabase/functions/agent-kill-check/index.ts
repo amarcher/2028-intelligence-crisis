@@ -15,6 +15,7 @@ import {
   getAccount,
   type AlpacaCredentials,
 } from '../agent-tick/alpaca.ts';
+import { sendKillAlert } from '../agent-tick/alerts.ts';
 
 const DAILY_LOSS_STOP_PCT = -0.04;
 
@@ -87,12 +88,22 @@ Deno.serve(async () => {
         `Owner must approve before the agent places new entries.`,
     });
 
+    // Fire alert email. Failure is non-fatal — halt is already persisted.
+    const alertRes = await sendKillAlert({
+      reason: haltReason,
+      canceledOrders: cancelResult.length,
+      dayPlPct: Number(lossPct),
+      equity: account.equity,
+      lastEquity: account.last_equity,
+    });
+
     return json({
       ok: true,
       halted: true,
       reason: haltReason,
       day_pl_pct: Number(lossPct),
       canceled_orders: cancelResult.length,
+      alert: alertRes,
     });
   } catch (err) {
     console.error('agent-kill-check failed:', err);
