@@ -6,6 +6,7 @@ import LaborDisplacement from './components/sections/LaborDisplacement';
 import ConsumerImpact from './components/sections/ConsumerImpact';
 import FinancialContagion from './components/sections/FinancialContagion';
 import PhaseFlipSignals from './components/sections/PhaseFlipSignals';
+import AgentDigest from './components/sections/AgentDigest';
 import FeedbackLoop from './components/FeedbackLoop';
 import ClaimTracker from './components/ClaimTracker';
 import Methodology from './components/Methodology';
@@ -21,6 +22,7 @@ export default function Dashboard() {
       <ConsumerImpact />
       <FinancialContagion />
       <PhaseFlipSignals />
+      <AgentDigest />
       <FeedbackLoop />
       <ClaimTracker />
       <Methodology />

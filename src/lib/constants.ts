@@ -143,4 +143,5 @@ export const SECTIONS = [
   { id: 'consumer', label: 'Consumer Impact', color: COLORS.warning },
   { id: 'financial', label: 'Financial Contagion', color: COLORS.teal },
   { id: 'phase-flip', label: 'Phase-Flip Signals', color: COLORS.accent },
+  { id: 'agent', label: 'Agent Digest', color: COLORS.accent },
 ] as const;
