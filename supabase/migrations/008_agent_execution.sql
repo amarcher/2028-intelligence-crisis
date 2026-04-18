@@ -110,15 +110,17 @@ CREATE INDEX IF NOT EXISTS idx_agent_fills_filled
 -- ————— agent_positions_cache —————
 -- Current-position snapshot synced from Alpaca. Regenerated each tick so the
 -- guardrail can cheaply check single-name exposure without re-hitting Alpaca.
+-- option_symbol defaults to '' rather than nullable so the composite PK stays
+-- plain — Postgres can't use function calls like COALESCE in a PK expression.
 CREATE TABLE IF NOT EXISTS agent_positions_cache (
   ticker TEXT NOT NULL,
-  option_symbol TEXT,
+  option_symbol TEXT NOT NULL DEFAULT '',
   qty NUMERIC NOT NULL,
   avg_entry NUMERIC,
   market_value NUMERIC,
   unrealized_pl NUMERIC,
   synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (ticker, COALESCE(option_symbol, ''))
+  PRIMARY KEY (ticker, option_symbol)
 );
 
 -- ————— RLS: match existing pattern (public read, service-role write) —————
