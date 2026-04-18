@@ -142,4 +142,5 @@ export const SECTIONS = [
   { id: 'labor', label: 'Labor Market', color: COLORS.accent },
   { id: 'consumer', label: 'Consumer Impact', color: COLORS.warning },
   { id: 'financial', label: 'Financial Contagion', color: COLORS.teal },
+  { id: 'phase-flip', label: 'Phase-Flip Signals', color: COLORS.accent },
 ] as const;
