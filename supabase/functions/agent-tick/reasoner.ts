@@ -23,6 +23,10 @@ export interface DriftSummary {
   claims: WowSummary;
   sp500: WowSummary;
   caseShiller: WowSummary;
+  /** VIX regime context for the S&P peak-stall reasoning.
+   *  Low + stable VIX = complacency (counterfactual for the thesis).
+   *  VIX spiking = risk-off regime shift (thesis-aligned). */
+  vix?: WowSummary;
 }
 
 export interface RecentDigest {
@@ -304,7 +308,7 @@ Week-over-week drift (last print · change):
 ${renderWow('JOLTS', drift.jolts)}
 ${renderWow('Initial claims', drift.claims)}
 ${renderWow('S&P 500', drift.sp500)}
-${renderWow('Case-Shiller national', drift.caseShiller)}
+${renderWow('Case-Shiller national', drift.caseShiller)}${drift.vix ? `\n${renderWow('VIX', drift.vix)}` : ''}
 
 Recent digests (most-recent first):
 ${renderRecentDigests(recentDigests)}
