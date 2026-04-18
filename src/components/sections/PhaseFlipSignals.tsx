@@ -2,47 +2,8 @@ import { useMemo } from 'react';
 import { COLORS, FRED_SERIES, VERDICT } from '../../lib/constants';
 import { useEconomicData } from '../../hooks/useEconomicData';
 import { useSaaSData } from '../../hooks/useSaaSData';
-import type { DataPoint, VerdictType } from '../../lib/types';
+import { computeSignals } from '../../lib/signals';
 import SectionCard from '../ui/SectionCard';
-
-type SignalState = 'fired' | 'pending';
-
-interface Signal {
-  label: string;
-  state: SignalState;
-  reading: string;
-  threshold: string;
-  note: string;
-}
-
-function lastNonNull(data: DataPoint[]): DataPoint | null {
-  for (let i = data.length - 1; i >= 0; i--) {
-    if (data[i].value != null) return data[i];
-  }
-  return null;
-}
-
-function lastNNonNull(data: DataPoint[], n: number): DataPoint[] {
-  const out: DataPoint[] = [];
-  for (let i = data.length - 1; i >= 0 && out.length < n; i--) {
-    if (data[i].value != null) out.unshift(data[i]);
-  }
-  return out;
-}
-
-function yoyPct(data: DataPoint[]): number | null {
-  const last = lastNonNull(data);
-  if (!last || last.value == null) return null;
-  const [ly, lm] = last.date.slice(0, 7).split('-').map(Number);
-  const targetPrefix = `${ly - 1}-${String(lm).padStart(2, '0')}`;
-  const prior = data.find((d) => d.date.startsWith(targetPrefix) && d.value != null);
-  if (!prior || prior.value == null) return null;
-  return ((last.value - prior.value) / prior.value) * 100;
-}
-
-function fmtThousands(v: number): string {
-  return v >= 1000 ? `${(v / 1000).toFixed(2)}M` : `${Math.round(v)}K`;
-}
 
 export default function PhaseFlipSignals() {
   const jolts = useEconomicData(FRED_SERIES.jolts_openings, 'jolts');
@@ -51,109 +12,20 @@ export default function PhaseFlipSignals() {
   const caseShiller = useEconomicData(FRED_SERIES.case_shiller_national, 'case_shiller_national');
   const saas = useSaaSData();
 
-  const signals = useMemo<Signal[]>(() => {
-    // 1. JOLTS < 6.0M, two prints in a row (values are in thousands)
-    const joltsLast2 = lastNNonNull(jolts.data, 2);
-    const joltsFired = joltsLast2.length === 2 && joltsLast2.every((d) => (d.value ?? Infinity) < 6000);
-    const joltsLatest = lastNonNull(jolts.data);
-    const joltsReading = joltsLatest?.value != null ? fmtThousands(joltsLatest.value) : '—';
+  const { signals, firedCount, phase, phaseLabel, verdict, playbook } = useMemo(
+    () =>
+      computeSignals({
+        jolts: jolts.data,
+        claims: claims.data,
+        sp500: sp500.data,
+        caseShiller: caseShiller.data,
+        saas: saas.data,
+      }),
+    [jolts.data, claims.data, sp500.data, caseShiller.data, saas.data],
+  );
 
-    // 2. Initial claims 4-week rolling avg > 300K
-    const claimsLast4 = lastNNonNull(claims.data, 4);
-    const claimsAvg =
-      claimsLast4.length > 0
-        ? claimsLast4.reduce((s, d) => s + (d.value ?? 0), 0) / claimsLast4.length
-        : null;
-    const claimsFired = claimsAvg != null && claimsAvg > 300_000;
-    const claimsReading = claimsAvg != null ? `${Math.round(claimsAvg / 1000)}K` : '—';
-
-    // 3. ServiceNow AND Workday ACV growth < 14% (dashboard lacks guidance data;
-    //    require both systems-of-record to slip as a stricter proxy for a "guide-cut" regime)
-    const latestSaaS = (field: 'servicenow' | 'workday'): number | null => {
-      for (let i = saas.data.length - 1; i >= 0; i--) {
-        const v = saas.data[i][field];
-        if (v != null) return v;
-      }
-      return null;
-    };
-    const now = latestSaaS('servicenow');
-    const wday = latestSaaS('workday');
-    const saasFired = now != null && wday != null && now < 14 && wday < 14;
-    const fmtPct = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}%`);
-    const saasReading = `NOW ${fmtPct(now)} · WDAY ${fmtPct(wday)}`;
-
-    // 4. S&P 500 peak stall — hit 7,500+ and failed to make a new high in 2+ monthly prints
-    const spNonNull = sp500.data.filter((d) => d.value != null) as Array<{ date: string; value: number }>;
-    let spFired = false;
-    let spReading = '—';
-    if (spNonNull.length > 0) {
-      let maxIdx = 0;
-      for (let i = 0; i < spNonNull.length; i++) {
-        if (spNonNull[i].value > spNonNull[maxIdx].value) maxIdx = i;
-      }
-      const peak = spNonNull[maxIdx].value;
-      const latest = spNonNull[spNonNull.length - 1].value;
-      const monthsSincePeak = spNonNull.length - 1 - maxIdx;
-      spFired = peak >= 7500 && monthsSincePeak >= 2 && latest < peak;
-      spReading = `peak ${Math.round(peak)} · now ${Math.round(latest)}`;
-    }
-
-    // 5. Case-Shiller national YoY turns negative (proxy for regional housing roll —
-    //    SF/Seattle data isn't tracked separately, so we use the national index)
-    const csYoy = yoyPct(caseShiller.data);
-    const csFired = csYoy != null && csYoy < 0;
-    const csReading = csYoy != null ? `${csYoy >= 0 ? '+' : ''}${csYoy.toFixed(1)}% YoY` : '—';
-
-    return [
-      {
-        label: 'JOLTS BREAKDOWN',
-        state: joltsFired ? 'fired' : 'pending',
-        reading: joltsReading,
-        threshold: '< 6.00M for 2 prints',
-        note: 'Labor demand collapse — leading indicator for white-collar cuts',
-      },
-      {
-        label: 'CLAIMS SPIKE',
-        state: claimsFired ? 'fired' : 'pending',
-        reading: claimsReading,
-        threshold: '4-wk avg > 300K',
-        note: 'First hard evidence of white-collar layoff wave',
-      },
-      {
-        label: 'SaaS GUIDE-DOWN',
-        state: saasFired ? 'fired' : 'pending',
-        reading: saasReading,
-        threshold: 'NOW & WDAY both < 14%',
-        note: 'Systems-of-record slip confirms build-vs-buy shift',
-      },
-      {
-        label: 'S&P PEAK STALL',
-        state: spFired ? 'fired' : 'pending',
-        reading: spReading,
-        threshold: 'peak ≥ 7,500 + 2mo below',
-        note: 'Bubble-leg topping — time to flip to short book',
-      },
-      {
-        label: 'HOUSING ROLL',
-        state: csFired ? 'fired' : 'pending',
-        reading: csReading,
-        threshold: 'Case-Shiller YoY < 0%',
-        note: 'Tech-hub housing contagion feeds bank & CRE tail',
-      },
-    ];
-  }, [jolts.data, claims.data, sp500.data, caseShiller.data, saas.data]);
-
-  const firedCount = signals.filter((s) => s.state === 'fired').length;
-  const phaseFlipped = firedCount >= 2;
-  const phaseLabel = phaseFlipped ? 'PHASE 2 · INFLECTION' : 'PHASE 1 · COUNTERFACTUAL GRIND';
+  const phaseFlipped = phase === 'inflection';
   const phaseColor = phaseFlipped ? COLORS.accent : COLORS.warning;
-
-  const verdict: VerdictType =
-    firedCount >= 4 ? 'confirmed' : firedCount >= 2 ? 'trending' : 'early';
-
-  const playbook = phaseFlipped
-    ? 'Flip the book: close AI-euphoria longs, roll SaaS LEAPS to 3–6mo near-dated puts, add SPY/QQQ put spreads, layer credit shorts (HYG, KRE). Keep 15–20% dry powder for bear rallies.'
-    : 'Hold the setup: keep cheap long-dated SaaS LEAPS puts (NOW/CRM/HUBS/WDAY/DDOG, Jan-27/28), carry TLT + GLD + XLP as counterfactual hedges, ride small QQQ/SMH longs for the bubble leg, and wait for ≥2 signals before deploying the short book.';
 
   return (
     <div id="section-phase-flip">
@@ -199,7 +71,7 @@ export default function PhaseFlipSignals() {
             const stateLabel = fired ? VERDICT.confirmed.icon + ' FIRED' : VERDICT.early.icon + ' NOT YET';
             return (
               <div
-                key={s.label}
+                key={s.key}
                 className="p-3 px-4 rounded-md border min-w-[140px]"
                 style={{
                   background: COLORS.bg,
