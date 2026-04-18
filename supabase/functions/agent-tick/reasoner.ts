@@ -1,10 +1,12 @@
 // Anthropic reasoner for agent-tick.
-// Prompt is aggressively cached on the static playbook + rubric + tool definition —
-// only the user message varies per tick, so cache_read_input_tokens should hit
-// on every invocation after the first. Invalidators to avoid: never put timestamps,
-// tick numbers, or session IDs in the system prompt or tool schema.
+// Uses raw fetch against /v1/messages rather than the SDK — Deno + esm.sh
+// compatibility for the TS SDK is fiddly, and the API shape is stable enough
+// to hand-roll. Prompt is aggressively cached on the static playbook + rubric
+// + tool definition; only the user message varies per tick, so
+// cache_read_input_tokens should hit on every invocation after the first.
+// Invalidators to avoid: never put timestamps, tick numbers, or session IDs
+// in the system prompt or tool schema.
 
-import Anthropic from 'https://esm.sh/@anthropic-ai/sdk@0.39.0';
 import type { SignalsResult, Signal } from '../../../src/lib/signals.ts';
 
 export type TickType = 'premarket' | 'close' | 'weekly';
@@ -199,7 +201,13 @@ Call the submit_digest tool exactly once with your full structured output. Do no
 
 // ---------- static tool definition (cached as part of prefix) ----------
 // Frozen shape. Never mutate per-tick.
-const TOOL: Anthropic.Tool = {
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+const TOOL: AnthropicTool = {
   name: 'submit_digest',
   description:
     'Submit the digest for the current tick. Call exactly once with the full structured output.',
@@ -314,14 +322,46 @@ ${renderRecentDigests(recentDigests)}
 Now evaluate the kill-switch, classify drift, and submit the digest. Remember: if ≥ 2 anti-thesis signals fire, the digest must be exactly one unwind_all proposal.`;
 }
 
+// ---------- raw API types (just what we consume) ----------
+interface AnthropicToolUseBlock {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+interface AnthropicTextBlock {
+  type: 'text';
+  text: string;
+}
+
+interface AnthropicThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+}
+
+type AnthropicContentBlock = AnthropicToolUseBlock | AnthropicTextBlock | AnthropicThinkingBlock;
+
+interface AnthropicMessagesResponse {
+  id: string;
+  type: 'message';
+  role: 'assistant';
+  content: AnthropicContentBlock[];
+  model: string;
+  stop_reason: string;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+}
+
 // ---------- Anthropic call with retry ----------
-async function callOnce(
-  client: Anthropic,
-  input: ReasonerInput,
-): Promise<ReasonerOutput> {
+async function callOnce(apiKey: string, input: ReasonerInput): Promise<ReasonerOutput> {
   const userMessage = buildUserMessage(input);
 
-  const response = await client.messages.create({
+  const requestBody = {
     model: MODEL,
     max_tokens: 4096,
     thinking: { type: 'adaptive' },
@@ -335,15 +375,32 @@ async function callOnce(
     tools: [TOOL],
     tool_choice: { type: 'tool', name: 'submit_digest' },
     messages: [{ role: 'user', content: userMessage }],
+  };
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(requestBody),
   });
 
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Anthropic API ${response.status}: ${errText.slice(0, 500)}`);
+  }
+
+  const body = (await response.json()) as AnthropicMessagesResponse;
+
   // Extract the tool_use block — forced via tool_choice, so it must exist.
-  const toolUse = response.content.find(
-    (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'submit_digest',
+  const toolUse = body.content.find(
+    (b): b is AnthropicToolUseBlock => b.type === 'tool_use' && b.name === 'submit_digest',
   );
   if (!toolUse) {
     throw new Error(
-      `reasoner: expected submit_digest tool_use in response, got: ${response.content.map((b) => b.type).join(',')}`,
+      `reasoner: expected submit_digest tool_use in response, got: ${body.content.map((b) => b.type).join(',')} · stop_reason=${body.stop_reason}`,
     );
   }
 
@@ -362,10 +419,10 @@ async function callOnce(
     proposals: out.proposals ?? [],
     scorecard: out.scorecard ?? null,
     usage: {
-      input_tokens: response.usage.input_tokens,
-      output_tokens: response.usage.output_tokens,
-      cache_read_tokens: response.usage.cache_read_input_tokens ?? 0,
-      cache_creation_tokens: response.usage.cache_creation_input_tokens ?? 0,
+      input_tokens: body.usage.input_tokens,
+      output_tokens: body.usage.output_tokens,
+      cache_read_tokens: body.usage.cache_read_input_tokens ?? 0,
+      cache_creation_tokens: body.usage.cache_creation_input_tokens ?? 0,
     },
     model: MODEL,
     status: 'ok',
@@ -377,14 +434,13 @@ export async function runReasoner(input: ReasonerInput): Promise<ReasonerOutput>
   if (!apiKey) {
     throw new Error('ANTHROPIC_API_KEY not configured in Edge Function secrets');
   }
-  const client = new Anthropic({ apiKey });
 
   try {
-    return await callOnce(client, input);
+    return await callOnce(apiKey, input);
   } catch (err) {
     console.warn('reasoner first attempt failed, retrying in 30s:', err);
     await new Promise((r) => setTimeout(r, 30_000));
-    const retried = await callOnce(client, input);
+    const retried = await callOnce(apiKey, input);
     return { ...retried, status: 'retried_ok' };
   }
 }
