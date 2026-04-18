@@ -28,6 +28,7 @@ const FRED = {
   claims: 'ICSA',
   sp500: 'SP500',
   caseShiller: 'CSUSHPISA',
+  vix: 'VIXCLS',
 } as const;
 
 const SAAS_SERIES: Array<{ id: string; field: keyof Omit<SaaSDataPoint, 'date'> }> = [
@@ -64,11 +65,12 @@ Deno.serve(async (req: Request) => {
     const body: TickRequest = await req.json().catch(() => ({}));
     const tickType: TickType = body.tick_type ?? 'close';
 
-    const [jolts, claims, sp500, caseShiller, saasSeries] = await Promise.all([
+    const [jolts, claims, sp500, caseShiller, vix, saasSeries] = await Promise.all([
       loadSeries(supabase, FRED.jolts),
       loadSeries(supabase, FRED.claims),
       loadSeries(supabase, FRED.sp500),
       loadSeries(supabase, FRED.caseShiller),
+      loadSeries(supabase, FRED.vix),
       Promise.all(SAAS_SERIES.map(({ id }) => loadSeries(supabase, id))),
     ]);
 
@@ -80,6 +82,7 @@ Deno.serve(async (req: Request) => {
       claims: weekOverWeek(claims),
       sp500: weekOverWeek(sp500),
       caseShiller: weekOverWeek(caseShiller),
+      ...(vix.length > 0 ? { vix: weekOverWeek(vix) } : {}),
     };
 
     const recentDigests = await loadRecentDigests(supabase, MEMORY_DEPTH[tickType]);

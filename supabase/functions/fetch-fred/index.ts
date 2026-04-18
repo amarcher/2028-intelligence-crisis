@@ -12,6 +12,7 @@ const FRED_SERIES = [
   'USINFO', 'PRS85006173', 'PCE',
   'LES1252881600Q', 'W006RC1Q027SBEA',
   'OPHNFB', 'A191RL1Q225SBEA', 'CSUSHPISA',
+  'VIXCLS', // CBOE Volatility Index — regime context for the reasoner
 ];
 
 interface FredObservation {
@@ -49,7 +50,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // Daily series need weekly aggregation + longer history
-    const DAILY_SERIES = new Set(['DGS10', 'SP500']);
+    const DAILY_SERIES = new Set(['DGS10', 'SP500', 'VIXCLS']);
 
     const results: Record<string, number> = {};
 
