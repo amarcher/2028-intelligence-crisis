@@ -12,10 +12,12 @@ import type { DataPoint, SaaSDataPoint } from '../../../src/lib/types.ts';
 import {
   runReasoner,
   type DriftSummary,
+  type Proposal,
   type RecentDigest,
   type TickType,
   type WowSummary,
 } from './reasoner.ts';
+import { deliverDigest } from './delivery.ts';
 
 interface TickRequest {
   tick_type?: TickType;
@@ -151,7 +153,11 @@ Deno.serve(async (req: Request) => {
       await incrementDeadman(supabase, errMsg);
     }
 
-    const { error: digestError } = await supabase.from('agent_digests').insert(digestRow);
+    const { data: insertedDigest, error: digestError } = await supabase
+      .from('agent_digests')
+      .insert(digestRow)
+      .select('id')
+      .single();
     if (digestError) throw new Error(`agent_digests insert failed: ${digestError.message}`);
 
     // Reset the deadman only when the reasoner succeeded (snapshots alone
@@ -162,6 +168,26 @@ Deno.serve(async (req: Request) => {
         .update({ consecutive_failures: 0, updated_at: new Date().toISOString() })
         .eq('id', 1);
     }
+
+    // Deliver. Never throws — sparse failures just land as delivered_* = false
+    // on the digest row + a warning log.
+    const delivery = await deliverDigest({
+      tick_type: tickType,
+      phase: result.phase,
+      fired_count: result.firedCount,
+      kill_switch_triggered: Boolean(digestRow.kill_switch_triggered),
+      narrative: String(digestRow.narrative),
+      proposals: (digestRow.proposals as Proposal[] | undefined) ?? [],
+      drift_notes: (digestRow.drift_notes as string | null) ?? null,
+      reasoner_status: String(digestRow.reasoner_status),
+    });
+    await supabase
+      .from('agent_digests')
+      .update({
+        delivered_email: delivery.delivered_email,
+        delivered_slack: delivery.delivered_slack,
+      })
+      .eq('id', insertedDigest.id);
 
     return json({
       ok: true,
@@ -174,6 +200,11 @@ Deno.serve(async (req: Request) => {
       // without needing to query the DB. For the real narrative this just
       // returns the first ~400 chars of Claude's output.
       narrative_preview: String(digestRow.narrative).slice(0, 400),
+      delivery: {
+        email: delivery.delivered_email,
+        slack: delivery.delivered_slack,
+        errors: delivery.errors,
+      },
     });
   } catch (err) {
     console.error('agent-tick failed:', err);
