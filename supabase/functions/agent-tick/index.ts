@@ -18,6 +18,14 @@ import {
   type WowSummary,
 } from './reasoner.ts';
 import { deliverDigest } from './delivery.ts';
+import {
+  orchestrateExecution,
+  type AgentApprovalRow,
+  type AgentOrderRow,
+  type ExecutionSupabase,
+} from './execute.ts';
+import type { PriorOrderSummary } from './guardrails.ts';
+import type { AlpacaPosition } from './alpaca.ts';
 
 interface TickRequest {
   tick_type?: TickType;
@@ -54,7 +62,7 @@ Deno.serve(async (req: Request) => {
   try {
     const { data: config } = await supabase
       .from('agent_config')
-      .select('enabled, mode')
+      .select('enabled, mode, phase, paper_mode, halted, halt_reason')
       .eq('id', 1)
       .single();
 
@@ -192,6 +200,26 @@ Deno.serve(async (req: Request) => {
       })
       .eq('id', insertedDigest.id);
 
+    // Execute when mode=auto_execute AND phase != shadow.
+    const execPhase = (config.phase ?? 'shadow') as 'shadow' | 'paper' | 'small_live' | 'scale';
+    const execConfig = {
+      halted: Boolean(config.halted),
+      halt_reason: (config.halt_reason as string | null) ?? null,
+      phase: execPhase,
+    };
+    let execution = null;
+    if (config.mode === 'auto_execute' && execPhase !== 'shadow') {
+      const supa = buildExecutionSupa(supabase, insertedDigest.id);
+      execution = await orchestrateExecution({
+        digestId: insertedDigest.id,
+        config: execConfig,
+        proposals: (digestRow.proposals as Proposal[] | undefined) ?? [],
+        firedCountThisTick: result.firedCount,
+        killSwitchTriggered: Boolean(digestRow.kill_switch_triggered),
+        supa,
+      });
+    }
+
     return json({
       ok: true,
       tick_id: snapshot.tick_id,
@@ -199,6 +227,7 @@ Deno.serve(async (req: Request) => {
       phase: result.phase,
       fired_count: result.firedCount,
       reasoner_status: digestRow.reasoner_status,
+      execution,
       // Surface the narrative so fallback reason is visible in the response
       // without needing to query the DB. For the real narrative this just
       // returns the first ~400 chars of Claude's output.
@@ -309,4 +338,84 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+// ——— execution adapter ———
+// Bridges the generic ExecutionSupabase interface in execute.ts to concrete
+// supabase-js calls, scoped to a single digest's execution run.
+function buildExecutionSupa(
+  supabase: ReturnType<typeof createClient>,
+  _digestId: string,
+): ExecutionSupabase {
+  return {
+    async insertOrder(row: AgentOrderRow) {
+      const { data, error } = await supabase
+        .from('agent_orders')
+        .insert(row)
+        .select('id')
+        .single();
+      if (error) {
+        console.warn(`agent_orders insert failed: ${error.message}`);
+        return null;
+      }
+      return { id: (data as { id: string }).id };
+    },
+    async insertApproval(row: AgentApprovalRow) {
+      const { data, error } = await supabase
+        .from('agent_approvals')
+        .insert(row)
+        .select('id')
+        .single();
+      if (error) {
+        console.warn(`agent_approvals insert failed: ${error.message}`);
+        return null;
+      }
+      return { id: (data as { id: string }).id };
+    },
+    async todayOrders(): Promise<PriorOrderSummary[]> {
+      // "Today" in ET — agent-tick runs on US market hours.
+      const etToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const { data, error } = await supabase
+        .from('agent_orders')
+        .select('notional_usd, instrument, status, created_at')
+        .gte('created_at', `${etToday}T00:00:00-05:00`);
+      if (error) {
+        console.warn(`todayOrders query failed: ${error.message}`);
+        return [];
+      }
+      return (data ?? []) as PriorOrderSummary[];
+    },
+    async replacePositionsCache(positions: AlpacaPosition[]) {
+      // Wipe + reinsert so the cache reflects Alpaca truth at tick time.
+      await supabase.from('agent_positions_cache').delete().neq('ticker', '');
+      if (positions.length === 0) return;
+      const rows = positions.map((p) => ({
+        ticker: p.asset_class === 'us_option' ? inferUnderlying(p.symbol) : p.symbol,
+        option_symbol: p.asset_class === 'us_option' ? p.symbol : null,
+        qty: p.qty,
+        avg_entry: p.avg_entry_price,
+        market_value: p.market_value,
+        unrealized_pl: p.unrealized_pl,
+        synced_at: new Date().toISOString(),
+      }));
+      const { error } = await supabase.from('agent_positions_cache').insert(rows);
+      if (error) console.warn(`positions cache insert failed: ${error.message}`);
+    },
+    async priorDigests(limit: number) {
+      const { data, error } = await supabase
+        .from('agent_digests')
+        .select('fired_count')
+        .order('created_at', { ascending: false })
+        .limit(limit + 1); // include current? excluding handled by caller
+      if (error) return [];
+      // First row is the current tick's digest; skip it.
+      return (data ?? []).slice(1) as Array<{ fired_count: number }>;
+    },
+  };
+}
+
+/** OCC symbol underlyings — 1-6 uppercase letters prefix. Fallback: whole symbol. */
+function inferUnderlying(occ: string): string {
+  const m = occ.match(/^([A-Z]{1,6})[0-9]{6}/);
+  return m ? m[1] : occ;
 }
