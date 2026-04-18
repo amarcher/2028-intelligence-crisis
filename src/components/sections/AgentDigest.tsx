@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { COLORS } from '../../lib/constants';
 import { useAgentData } from '../../hooks/useAgentData';
-import type { AgentDigest, AgentProposal, VerdictType } from '../../lib/types';
+import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
+import type { AgentConfig, AgentDigest, AgentProposal, VerdictType } from '../../lib/types';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
 
@@ -379,8 +381,216 @@ function CostSummary({ digests }: { digests: AgentDigest[] }) {
   );
 }
 
+function AgentControls({ config, onUpdate }: { config: AgentConfig | null; onUpdate: () => void }) {
+  const { email, loading, signInWithEmail, signOut } = useAuth();
+  const [showSignIn, setShowSignIn] = useState(false);
+  const [signInInput, setSignInInput] = useState('');
+  const [signInStatus, setSignInStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [signInError, setSignInError] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  if (loading) return null;
+
+  const isOwner = email != null && config?.owner_email != null && email === config.owner_email;
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!signInInput.trim()) return;
+    setSignInStatus('sending');
+    setSignInError(null);
+    const res = await signInWithEmail(signInInput.trim());
+    if (res.ok) {
+      setSignInStatus('sent');
+    } else {
+      setSignInStatus('error');
+      setSignInError(res.error);
+    }
+  };
+
+  const handleToggleEnabled = async () => {
+    if (!supabase || !config) return;
+    const willEnable = !config.enabled;
+    const verb = willEnable ? 'enable' : 'mute';
+    if (!window.confirm(`${verb} the agent?`)) return;
+    setUpdating(true);
+    setUpdateError(null);
+    const { error: err } = await supabase
+      .from('agent_config')
+      .update({
+        enabled: willEnable,
+        ...(willEnable ? { consecutive_failures: 0, killed_reason: null } : {}),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', 1);
+    setUpdating(false);
+    if (err) {
+      setUpdateError(err.message);
+    } else {
+      onUpdate();
+    }
+  };
+
+  const handleResetDeadman = async () => {
+    if (!supabase || !config) return;
+    if (!window.confirm('Reset deadman counter?')) return;
+    setUpdating(true);
+    setUpdateError(null);
+    const { error: err } = await supabase
+      .from('agent_config')
+      .update({
+        consecutive_failures: 0,
+        killed_reason: null,
+        enabled: true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', 1);
+    setUpdating(false);
+    if (err) {
+      setUpdateError(err.message);
+    } else {
+      onUpdate();
+    }
+  };
+
+  // Unauthenticated — inline sign-in form
+  if (!email) {
+    return (
+      <div
+        className="mt-4 p-3 rounded-md flex flex-col gap-2"
+        style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+      >
+        {!showSignIn ? (
+          <button
+            onClick={() => setShowSignIn(true)}
+            className="text-[11px] font-mono tracking-[0.08em] self-start px-2 py-1 rounded transition-colors cursor-pointer"
+            style={{ color: COLORS.textDim, background: 'transparent' }}
+          >
+            owner sign-in →
+          </button>
+        ) : signInStatus === 'sent' ? (
+          <div className="text-[12px] font-mono" style={{ color: COLORS.positive }}>
+            ✓ magic link sent. check your email and click the link to return here signed in.
+          </div>
+        ) : (
+          <form onSubmit={handleSignIn} className="flex gap-2 flex-wrap items-center">
+            <span className="text-[10px] font-mono tracking-[0.1em]" style={{ color: COLORS.textDim }}>
+              OWNER EMAIL
+            </span>
+            <input
+              type="email"
+              required
+              placeholder="you@example.com"
+              value={signInInput}
+              onChange={(e) => setSignInInput(e.target.value)}
+              className="text-[12px] font-mono px-2 py-1 rounded flex-1 min-w-[200px] outline-none"
+              style={{
+                background: COLORS.bgCard,
+                border: `1px solid ${COLORS.border}`,
+                color: COLORS.textBright,
+              }}
+            />
+            <button
+              type="submit"
+              disabled={signInStatus === 'sending'}
+              className="text-[10px] font-mono font-bold tracking-[0.1em] px-3 py-1 rounded cursor-pointer"
+              style={{
+                color: COLORS.accent,
+                background: `${COLORS.accent}18`,
+                border: `1px solid ${COLORS.accent}40`,
+                opacity: signInStatus === 'sending' ? 0.5 : 1,
+              }}
+            >
+              {signInStatus === 'sending' ? 'SENDING…' : 'SEND MAGIC LINK'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSignIn(false);
+                setSignInStatus('idle');
+              }}
+              className="text-[10px] font-mono px-2 py-1 rounded cursor-pointer"
+              style={{ color: COLORS.textDim }}
+            >
+              cancel
+            </button>
+            {signInError && (
+              <div className="text-[11px] basis-full" style={{ color: COLORS.accent }}>
+                {signInError}
+              </div>
+            )}
+          </form>
+        )}
+      </div>
+    );
+  }
+
+  // Authenticated — show whether they're the owner + action buttons
+  return (
+    <div
+      className="mt-4 p-3 rounded-md flex gap-3 items-center flex-wrap"
+      style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+    >
+      <span className="text-[10px] font-mono tracking-[0.1em]" style={{ color: COLORS.textDim }}>
+        SIGNED IN · {email}
+      </span>
+
+      {!isOwner ? (
+        <span className="text-[11px] font-mono" style={{ color: COLORS.warning }}>
+          read-only (not an owner)
+        </span>
+      ) : (
+        <>
+          <button
+            onClick={handleToggleEnabled}
+            disabled={updating}
+            className="text-[10px] font-mono font-bold tracking-[0.1em] px-3 py-1 rounded cursor-pointer"
+            style={{
+              color: config?.enabled ? COLORS.accent : COLORS.positive,
+              background: `${config?.enabled ? COLORS.accent : COLORS.positive}18`,
+              border: `1px solid ${(config?.enabled ? COLORS.accent : COLORS.positive)}40`,
+              opacity: updating ? 0.5 : 1,
+            }}
+          >
+            {config?.enabled ? 'MUTE AGENT' : 'ENABLE AGENT'}
+          </button>
+          {(config?.consecutive_failures ?? 0) > 0 || config?.killed_reason ? (
+            <button
+              onClick={handleResetDeadman}
+              disabled={updating}
+              className="text-[10px] font-mono font-bold tracking-[0.1em] px-3 py-1 rounded cursor-pointer"
+              style={{
+                color: COLORS.warning,
+                background: `${COLORS.warning}18`,
+                border: `1px solid ${COLORS.warning}40`,
+                opacity: updating ? 0.5 : 1,
+              }}
+            >
+              RESET DEADMAN ({config?.consecutive_failures ?? 0})
+            </button>
+          ) : null}
+        </>
+      )}
+
+      <button
+        onClick={signOut}
+        className="text-[10px] font-mono px-2 py-1 rounded cursor-pointer ml-auto"
+        style={{ color: COLORS.textDim }}
+      >
+        sign out
+      </button>
+
+      {updateError && (
+        <div className="text-[11px] basis-full" style={{ color: COLORS.accent }}>
+          update failed: {updateError}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AgentDigestSection() {
-  const { digests, config, isLoading, error } = useAgentData();
+  const { digests, config, isLoading, error, refetch } = useAgentData();
   const latest = digests[0];
   const hasData = latest !== undefined;
 
@@ -451,6 +661,8 @@ export default function AgentDigestSection() {
         )}
 
         <CostSummary digests={digests} />
+
+        <AgentControls config={config} onUpdate={refetch} />
       </SectionCard>
     </div>
   );

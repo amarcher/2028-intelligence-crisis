@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { AgentConfig, AgentDigest } from '../lib/types';
 
@@ -7,6 +7,7 @@ interface UseAgentDataResult {
   config: AgentConfig | null;
   isLoading: boolean;
   error: string | null;
+  refetch: () => Promise<void>;
 }
 
 const DIGEST_LIMIT = 15;
@@ -17,51 +18,49 @@ export function useAgentData(): UseAgentDataResult {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!supabase) {
       setError('Supabase not configured');
       setIsLoading(false);
       return;
     }
 
-    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
 
-    async function load() {
-      setIsLoading(true);
-      setError(null);
+    const [digestRes, configRes] = await Promise.all([
+      supabase
+        .from('agent_digests')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(DIGEST_LIMIT),
+      supabase.from('agent_config').select('*').eq('id', 1).single(),
+    ]);
 
-      const [digestRes, configRes] = await Promise.all([
-        supabase!
-          .from('agent_digests')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(DIGEST_LIMIT),
-        supabase!.from('agent_config').select('*').eq('id', 1).single(),
-      ]);
-
-      if (cancelled) return;
-
-      if (digestRes.error) {
-        setError(`digests: ${digestRes.error.message}`);
-      } else {
-        setDigests((digestRes.data ?? []) as AgentDigest[]);
-      }
-
-      if (configRes.error) {
-        // No config row yet is a plausible non-error state during setup.
-        setConfig(null);
-      } else {
-        setConfig(configRes.data as AgentConfig);
-      }
-
-      setIsLoading(false);
+    if (digestRes.error) {
+      setError(`digests: ${digestRes.error.message}`);
+    } else {
+      setDigests((digestRes.data ?? []) as AgentDigest[]);
     }
 
-    load();
+    if (configRes.error) {
+      setConfig(null);
+    } else {
+      setConfig(configRes.data as AgentConfig);
+    }
+
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    load().catch(() => {
+      if (!cancelled) setError('load failed');
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [load]);
 
-  return { digests, config, isLoading, error };
+  return { digests, config, isLoading, error, refetch: load };
 }
