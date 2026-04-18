@@ -101,4 +101,5 @@ export interface AgentConfig {
   consecutive_failures: number;
   killed_reason: string | null;
   updated_at: string;
+  owner_email: string | null;
 }
