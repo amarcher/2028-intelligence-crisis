@@ -1,23 +1,26 @@
-// Supabase Edge Function: Agent tick (skeleton)
-// Reads economic_data + SaaS series, runs computeSignals(), writes one
-// agent_snapshots row + one stub agent_digests row per invocation.
+// Supabase Edge Function: Agent tick
+// Reads economic_data + SaaS series, runs computeSignals(), calls the Claude
+// reasoner to produce a digest (narrative + proposals), persists to
+// agent_snapshots + agent_digests. Falls back to a skeleton digest if the
+// reasoner is unavailable so the dashboard never goes blank.
 // Deploy: supabase functions deploy agent-tick
-// Invoke: supabase functions invoke agent-tick --body '{"tick_type":"close"}'
-//
-// The Claude reasoner (Task 5) will fill the digest's narrative + proposals;
-// for now the digest is a placeholder so the schema + cron + UI wiring can land first.
+// Invoke: curl -X POST <function-url> -d '{"tick_type":"close"}'
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { computeSignals } from '../../../src/lib/signals.ts';
 import type { DataPoint, SaaSDataPoint } from '../../../src/lib/types.ts';
-
-type TickType = 'premarket' | 'close' | 'weekly';
+import {
+  runReasoner,
+  type DriftSummary,
+  type RecentDigest,
+  type TickType,
+  type WowSummary,
+} from './reasoner.ts';
 
 interface TickRequest {
   tick_type?: TickType;
 }
 
-// Series needed by the 5 Phase-Flip signals
 const FRED = {
   jolts: 'JTSJOL',
   claims: 'ICSA',
@@ -34,13 +37,18 @@ const SAAS_SERIES: Array<{ id: string; field: keyof Omit<SaaSDataPoint, 'date'> 
   { id: 'saas_DDOG', field: 'datadog' },
 ];
 
+const MEMORY_DEPTH: Record<TickType, number> = {
+  premarket: 3,
+  close: 3,
+  weekly: 8,
+};
+
 Deno.serve(async (req: Request) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
-    // Honor the killed flag — if the deadman switch tripped, do nothing.
     const { data: config } = await supabase
       .from('agent_config')
       .select('enabled, mode')
@@ -54,7 +62,6 @@ Deno.serve(async (req: Request) => {
     const body: TickRequest = await req.json().catch(() => ({}));
     const tickType: TickType = body.tick_type ?? 'close';
 
-    // Load all required series in parallel
     const [jolts, claims, sp500, caseShiller, saasSeries] = await Promise.all([
       loadSeries(supabase, FRED.jolts),
       loadSeries(supabase, FRED.claims),
@@ -64,19 +71,18 @@ Deno.serve(async (req: Request) => {
     ]);
 
     const saas = mergeSaasSeries(saasSeries);
-
     const result = computeSignals({ jolts, claims, sp500, caseShiller, saas });
 
-    // Week-over-week drift summary — a one-liner per series. Claude will
-    // consume this in Task 5 to color the digest narrative.
-    const drift = {
+    const drift: DriftSummary = {
       jolts: weekOverWeek(jolts),
       claims: weekOverWeek(claims),
       sp500: weekOverWeek(sp500),
       caseShiller: weekOverWeek(caseShiller),
-      generated_at: new Date().toISOString(),
     };
 
+    const recentDigests = await loadRecentDigests(supabase, MEMORY_DEPTH[tickType]);
+
+    // Snapshot lands regardless of whether the reasoner succeeds.
     const { data: snapshot, error: snapError } = await supabase
       .from('agent_snapshots')
       .insert({
@@ -88,31 +94,70 @@ Deno.serve(async (req: Request) => {
           verdict: result.verdict,
           signals: result.signals,
         },
-        drift,
+        drift: { ...drift, generated_at: new Date().toISOString() },
       })
       .select('tick_id')
       .single();
 
     if (snapError) throw new Error(`agent_snapshots insert failed: ${snapError.message}`);
 
-    // Skeleton digest — narrative + proposals are placeholders.
-    // Task 5 replaces this branch with a Claude call that populates both.
-    const { error: digestError } = await supabase.from('agent_digests').insert({
-      tick_id: snapshot.tick_id,
-      tick_type: tickType,
-      phase: result.phase,
-      fired_count: result.firedCount,
-      kill_switch_triggered: false,
-      narrative: `[skeleton] ${result.phaseLabel} · ${result.firedCount}/5 signals firing. ${result.playbook}`,
-      proposals: [],
-      drift_notes: null,
-      scorecard: tickType === 'weekly' ? scorecardFromSignals(result.signals) : null,
-    });
+    // Call the reasoner. On any failure (after internal retry), fall through to
+    // a skeleton digest so the UI never goes blank and the deadman fires cleanly.
+    let digestRow: Record<string, unknown>;
+    try {
+      const reasoned = await runReasoner({
+        tickType,
+        signals: result,
+        drift,
+        recentDigests,
+      });
 
+      digestRow = {
+        tick_id: snapshot.tick_id,
+        tick_type: tickType,
+        phase: result.phase,
+        fired_count: result.firedCount,
+        kill_switch_triggered: reasoned.kill_switch_triggered,
+        narrative: reasoned.narrative,
+        proposals: reasoned.proposals,
+        drift_notes: reasoned.drift_notes,
+        scorecard: tickType === 'weekly' ? reasoned.scorecard : null,
+        cost_input_tokens: reasoned.usage.input_tokens,
+        cost_output_tokens: reasoned.usage.output_tokens,
+        cost_cache_read_tokens: reasoned.usage.cache_read_tokens,
+        cost_cache_creation_tokens: reasoned.usage.cache_creation_tokens,
+        cost_model: reasoned.model,
+        reasoner_status: reasoned.status,
+      };
+    } catch (reasonerErr) {
+      console.error('reasoner failed after retry, using skeleton fallback:', reasonerErr);
+      digestRow = {
+        tick_id: snapshot.tick_id,
+        tick_type: tickType,
+        phase: result.phase,
+        fired_count: result.firedCount,
+        kill_switch_triggered: false,
+        narrative: `[Claude unavailable — see dashboard for signal state] ${result.phaseLabel} · ${result.firedCount}/5 signals firing. ${result.playbook}`,
+        proposals: [],
+        drift_notes: null,
+        scorecard: null,
+        reasoner_status: 'fallback_unavailable',
+      };
+      // Bump deadman so 3 consecutive reasoner failures disable the agent.
+      await incrementDeadman(supabase, String(reasonerErr));
+    }
+
+    const { error: digestError } = await supabase.from('agent_digests').insert(digestRow);
     if (digestError) throw new Error(`agent_digests insert failed: ${digestError.message}`);
 
-    // Success — reset the deadman counter.
-    await supabase.from('agent_config').update({ consecutive_failures: 0, updated_at: new Date().toISOString() }).eq('id', 1);
+    // Reset the deadman only when the reasoner succeeded (snapshots alone
+    // aren't proof the pipeline is healthy).
+    if (digestRow.reasoner_status !== 'fallback_unavailable') {
+      await supabase
+        .from('agent_config')
+        .update({ consecutive_failures: 0, updated_at: new Date().toISOString() })
+        .eq('id', 1);
+    }
 
     return json({
       ok: true,
@@ -120,27 +165,12 @@ Deno.serve(async (req: Request) => {
       tick_type: tickType,
       phase: result.phase,
       fired_count: result.firedCount,
+      reasoner_status: digestRow.reasoner_status,
     });
   } catch (err) {
     console.error('agent-tick failed:', err);
-
-    // Increment the deadman counter; at 3, disable the agent.
-    const { data: config } = await supabase
-      .from('agent_config')
-      .select('consecutive_failures')
-      .eq('id', 1)
-      .single();
-    const next = (config?.consecutive_failures ?? 0) + 1;
-    await supabase
-      .from('agent_config')
-      .update({
-        consecutive_failures: next,
-        ...(next >= 3 ? { enabled: false, killed_reason: `deadman: ${String(err).slice(0, 200)}` } : {}),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', 1);
-
-    return new Response(JSON.stringify({ error: String(err), consecutive_failures: next }), {
+    await incrementDeadman(supabase, String(err));
+    return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -157,6 +187,22 @@ async function loadSeries(supabase: ReturnType<typeof createClient>, seriesId: s
     .order('date', { ascending: true });
   if (error) throw new Error(`loadSeries(${seriesId}) failed: ${error.message}`);
   return (data ?? []).map((d) => ({ date: d.date as string, value: d.value as number | null }));
+}
+
+async function loadRecentDigests(
+  supabase: ReturnType<typeof createClient>,
+  limit: number,
+): Promise<RecentDigest[]> {
+  const { data, error } = await supabase
+    .from('agent_digests')
+    .select('created_at, tick_type, phase, fired_count, narrative, kill_switch_triggered')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn(`loadRecentDigests failed (non-fatal): ${error.message}`);
+    return [];
+  }
+  return (data ?? []) as RecentDigest[];
 }
 
 function mergeSaasSeries(seriesArrays: DataPoint[][]): SaaSDataPoint[] {
@@ -183,11 +229,10 @@ function mergeSaasSeries(seriesArrays: DataPoint[][]): SaaSDataPoint[] {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function weekOverWeek(data: DataPoint[]): { last: number | null; wow_delta: number | null; wow_pct: number | null } {
+function weekOverWeek(data: DataPoint[]): WowSummary {
   const nonNull = data.filter((d) => d.value != null);
   if (nonNull.length === 0) return { last: null, wow_delta: null, wow_pct: null };
   const last = nonNull[nonNull.length - 1].value!;
-  // Step back ~1 week; for monthly series this effectively becomes "prior print"
   const prior = nonNull[nonNull.length - 2]?.value ?? null;
   if (prior == null) return { last, wow_delta: null, wow_pct: null };
   return {
@@ -197,10 +242,24 @@ function weekOverWeek(data: DataPoint[]): { last: number | null; wow_delta: numb
   };
 }
 
-function scorecardFromSignals(signals: ReturnType<typeof computeSignals>['signals']) {
-  return Object.fromEntries(
-    signals.map((s) => [s.key, s.state === 'fired' ? 'fired' : 'pending']),
-  );
+async function incrementDeadman(
+  supabase: ReturnType<typeof createClient>,
+  reason: string,
+): Promise<void> {
+  const { data: config } = await supabase
+    .from('agent_config')
+    .select('consecutive_failures')
+    .eq('id', 1)
+    .single();
+  const next = (config?.consecutive_failures ?? 0) + 1;
+  await supabase
+    .from('agent_config')
+    .update({
+      consecutive_failures: next,
+      ...(next >= 3 ? { enabled: false, killed_reason: `deadman: ${reason.slice(0, 200)}` } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', 1);
 }
 
 function json(body: unknown, status = 200): Response {
