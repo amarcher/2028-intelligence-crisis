@@ -3,7 +3,7 @@ import { COLORS } from '../../lib/constants';
 import { useAgentData } from '../../hooks/useAgentData';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
-import type { AgentConfig, AgentDigest, AgentProposal, VerdictType } from '../../lib/types';
+import type { AgentApproval, AgentConfig, AgentDigest, AgentOrder, AgentProposal, VerdictType } from '../../lib/types';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
 
@@ -334,20 +334,23 @@ function StatusStrip({
 }) {
   const enabled = config?.enabled ?? false;
   const enabledSignal: 'alarming' | 'reassuring' = enabled ? 'reassuring' : 'alarming';
+  const phaseValue = config?.phase ?? 'shadow';
+  const execMode = config?.mode === 'auto_execute' ? 'EXECUTING' : 'SIGNAL ONLY';
+  const paperLabel = config?.paper_mode ? 'paper' : 'LIVE';
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
       <MiniStat
         label="STATUS"
         value={enabled ? 'ENABLED' : 'DISABLED'}
-        change={config?.killed_reason ? `killed: ${config.killed_reason.slice(0, 50)}` : config ? `mode: ${config.mode}` : 'no config'}
+        change={config?.killed_reason ? `killed: ${config.killed_reason.slice(0, 50)}` : config ? `${execMode} · ${paperLabel}` : 'no config'}
         signal={enabledSignal}
       />
       <MiniStat
-        label="PHASE"
-        value={latest ? (latest.phase === 'inflection' ? 'PHASE 2' : 'PHASE 1') : '—'}
-        change={latest ? `${latest.fired_count}/5 firing` : 'no digests yet'}
-        signal={latest?.phase === 'inflection' ? 'alarming' : 'neutral'}
+        label="EXEC PHASE"
+        value={phaseValue.replace('_', ' ').toUpperCase()}
+        change={latest ? `digest ${latest.phase === 'inflection' ? 'Phase 2' : 'Phase 1'} · ${latest.fired_count}/5` : 'no digests yet'}
+        signal={phaseValue === 'small_live' || phaseValue === 'scale' ? 'alarming' : 'neutral'}
       />
       <MiniStat
         label="LAST TICK"
@@ -606,10 +609,238 @@ function AgentControls({ config, onUpdate }: { config: AgentConfig | null; onUpd
   );
 }
 
+function KillBanner({ config }: { config: AgentConfig }) {
+  if (!config.halted) return null;
+  const since = config.halted_at ? timeAgo(config.halted_at) : 'unknown';
+  return (
+    <div
+      className="mb-4 rounded-md px-4 py-3"
+      style={{
+        background: `${COLORS.accent}12`,
+        border: `1px solid ${COLORS.accent}60`,
+      }}
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <span
+          className="text-[10px] font-bold tracking-[0.15em] font-mono"
+          style={{ color: COLORS.accent }}
+        >
+          🛑 HALTED
+        </span>
+        <span className="text-[11px] font-mono" style={{ color: COLORS.textDim }}>
+          {since}
+        </span>
+      </div>
+      <div className="text-[13px] mt-1" style={{ color: COLORS.textBright }}>
+        {config.halt_reason ?? 'agent halted without reason'}
+      </div>
+      <div className="text-[11px] mt-1 font-mono" style={{ color: COLORS.textDim }}>
+        Owner must resume via "Reset Deadman" or the resume approval below.
+      </div>
+    </div>
+  );
+}
+
+const APPROVAL_KIND_COLOR: Record<AgentApproval['kind'], string> = {
+  phase_flip: COLORS.warning,
+  oversize_ticket: COLORS.warning,
+  new_ticker: COLORS.blue,
+  unwind_all: COLORS.accent,
+  resume_after_halt: COLORS.accent,
+};
+
+function ApprovalCard({
+  approval,
+  isOwner,
+  onAction,
+}: {
+  approval: AgentApproval;
+  isOwner: boolean;
+  onAction: (id: string, status: 'approved' | 'rejected') => Promise<void>;
+}) {
+  const [updating, setUpdating] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const color = APPROVAL_KIND_COLOR[approval.kind];
+  const kindLabel = approval.kind.replace(/_/g, ' ').toUpperCase();
+  const isPending = approval.status === 'pending';
+  const expired = isPending && new Date(approval.expires_at) < new Date();
+
+  const act = async (status: 'approved' | 'rejected') => {
+    if (!isOwner) return;
+    if (!window.confirm(`${status === 'approved' ? 'APPROVE' : 'REJECT'} this ${kindLabel}?`)) return;
+    setUpdating(true);
+    setErr(null);
+    try {
+      await onAction(approval.id, status);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  return (
+    <div
+      className="rounded-md p-3"
+      style={{
+        background: COLORS.bg,
+        border: `1px solid ${isPending ? `${color}60` : COLORS.border}`,
+      }}
+    >
+      <div className="flex items-center gap-2 flex-wrap mb-2">
+        <span
+          className="text-[9px] font-bold tracking-[0.1em] font-mono px-1.5 py-[2px] rounded"
+          style={{ color, background: `${color}18`, border: `1px solid ${color}40` }}
+        >
+          {kindLabel}
+        </span>
+        <span
+          className="text-[9px] font-bold tracking-[0.08em] font-mono"
+          style={{ color: isPending ? (expired ? COLORS.textDim : COLORS.warning) : COLORS.textDim }}
+        >
+          {expired ? 'EXPIRED' : approval.status.toUpperCase()}
+        </span>
+        <span className="text-[11px] font-mono flex-1 text-right" style={{ color: COLORS.textDim }}>
+          {timeAgo(approval.created_at)}
+        </span>
+      </div>
+      <div className="text-[13px] leading-[1.5] mb-2" style={{ color: COLORS.textBright }}>
+        {approval.rationale}
+      </div>
+      {approval.proposals.length > 0 && (
+        <details>
+          <summary
+            className="cursor-pointer text-[11px] font-mono"
+            style={{ color: COLORS.textDim }}
+          >
+            {approval.proposals.length} proposal{approval.proposals.length === 1 ? '' : 's'}
+          </summary>
+          <div className="flex flex-col gap-1.5 mt-2">
+            {approval.proposals.map((p, i) => (
+              <div
+                key={i}
+                className="text-[11px] font-mono leading-[1.45] rounded p-2"
+                style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}` }}
+              >
+                <span style={{ color: COLORS.textBright }}>{p.action.toUpperCase()}</span>{' '}
+                <span style={{ color: COLORS.textBright, fontWeight: 700 }}>{p.ticker}</span>{' '}
+                <span style={{ color: COLORS.textDim }}>
+                  {p.instrument !== 'equity' ? `${p.instrument.replace('_', ' ')} ` : ''}
+                  {p.expiry ?? ''} {p.strike != null ? `@${p.strike}` : ''} · {p.size_hint}
+                </span>
+                <div style={{ color: COLORS.text }} className="mt-1">
+                  {p.rationale}
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {isPending && !expired && isOwner && (
+        <div className="flex gap-2 mt-3 flex-wrap">
+          <button
+            onClick={() => act('approved')}
+            disabled={updating}
+            className="text-[10px] font-mono font-bold tracking-[0.1em] px-3 py-1 rounded cursor-pointer"
+            style={{
+              color: COLORS.positive,
+              background: `${COLORS.positive}18`,
+              border: `1px solid ${COLORS.positive}40`,
+              opacity: updating ? 0.5 : 1,
+            }}
+          >
+            APPROVE
+          </button>
+          <button
+            onClick={() => act('rejected')}
+            disabled={updating}
+            className="text-[10px] font-mono font-bold tracking-[0.1em] px-3 py-1 rounded cursor-pointer"
+            style={{
+              color: COLORS.accent,
+              background: `${COLORS.accent}18`,
+              border: `1px solid ${COLORS.accent}40`,
+              opacity: updating ? 0.5 : 1,
+            }}
+          >
+            REJECT
+          </button>
+        </div>
+      )}
+      {err && (
+        <div className="text-[11px] mt-2" style={{ color: COLORS.accent }}>
+          {err}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ORDER_STATUS_COLOR: Record<AgentOrder['status'], string> = {
+  queued: COLORS.textDim,
+  submitted: COLORS.blue,
+  filled: COLORS.positive,
+  partially_filled: COLORS.warning,
+  canceled: COLORS.textDim,
+  rejected: COLORS.accent,
+  expired: COLORS.textDim,
+};
+
+function OrdersList({ orders }: { orders: AgentOrder[] }) {
+  if (orders.length === 0) return null;
+  return (
+    <div className="mt-5">
+      <div
+        className="text-[10px] font-bold tracking-[0.15em] font-mono mb-2"
+        style={{ color: COLORS.textDim }}
+      >
+        RECENT ORDERS · {orders.length}
+      </div>
+      <div className="flex flex-col gap-1">
+        {orders.map((o) => {
+          const statusColor = ORDER_STATUS_COLOR[o.status];
+          const instrDetail = o.option_symbol ?? o.instrument;
+          return (
+            <div
+              key={o.id}
+              className="rounded px-3 py-2 flex items-center gap-2 flex-wrap text-[11px] font-mono"
+              style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+            >
+              <span
+                className="font-bold tracking-[0.08em] px-1.5 py-[1px] rounded"
+                style={{ color: statusColor, background: `${statusColor}18`, border: `1px solid ${statusColor}30` }}
+              >
+                {o.status.toUpperCase()}
+              </span>
+              <span style={{ color: COLORS.textBright, fontWeight: 700 }}>{o.side.toUpperCase()}</span>
+              <span style={{ color: COLORS.textBright, fontWeight: 700 }}>{o.ticker}</span>
+              <span style={{ color: COLORS.textDim }}>{o.qty} · {instrDetail}</span>
+              {o.notional_usd != null && (
+                <span style={{ color: COLORS.textDim }}>~${Math.round(o.notional_usd)}</span>
+              )}
+              {o.filled_avg_price != null && (
+                <span style={{ color: COLORS.positive }}>@{o.filled_avg_price.toFixed(2)}</span>
+              )}
+              <span className="flex-1 text-right" style={{ color: COLORS.textDim }}>
+                {timeAgo(o.created_at)}
+              </span>
+              {o.rejection_reason && (
+                <div className="basis-full text-[10px]" style={{ color: COLORS.accent }}>
+                  ⚠ {o.rejection_reason}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function AgentDigestSection() {
-  const { digests, config, isLoading, error, refetch } = useAgentData();
+  const { digests, config, approvals, orders, isLoading, error, refetch } = useAgentData();
   const latest = digests[0];
   const hasData = latest !== undefined;
+  const pendingApprovals = approvals.filter((a) => a.status === 'pending' && new Date(a.expires_at) > new Date());
 
   const verdict: VerdictType = !hasData
     ? 'early'
@@ -640,6 +871,8 @@ export default function AgentDigestSection() {
             Failed to load agent data: {error}
           </div>
         )}
+
+        {config && <KillBanner config={config} />}
 
         <StatusStrip config={config} latest={latest} digestCount={digests.length} />
 
@@ -677,10 +910,64 @@ export default function AgentDigestSection() {
           </div>
         )}
 
+        <ApprovalsBlock approvals={pendingApprovals} config={config} onAction={refetch} />
+
+        <OrdersList orders={orders} />
+
         <CostSummary digests={digests} />
 
         <AgentControls config={config} onUpdate={refetch} />
       </SectionCard>
+    </div>
+  );
+}
+
+function ApprovalsBlock({
+  approvals,
+  config,
+  onAction,
+}: {
+  approvals: AgentApproval[];
+  config: AgentConfig | null;
+  onAction: () => Promise<void>;
+}) {
+  const { email } = useAuth();
+  const isOwner = !!email && !!config?.owner_email && email === config.owner_email;
+
+  if (approvals.length === 0) return null;
+
+  const handleAction = async (id: string, status: 'approved' | 'rejected') => {
+    if (!supabase) throw new Error('Supabase not configured');
+    const { error: err } = await supabase
+      .from('agent_approvals')
+      .update({
+        status,
+        approved_at: new Date().toISOString(),
+        approved_by: email,
+      })
+      .eq('id', id);
+    if (err) throw new Error(err.message);
+    await onAction();
+  };
+
+  return (
+    <div className="mt-5">
+      <div
+        className="text-[10px] font-bold tracking-[0.15em] font-mono mb-2 flex items-center gap-2"
+        style={{ color: COLORS.warning }}
+      >
+        PENDING APPROVALS · {approvals.length}
+        {!isOwner && (
+          <span style={{ color: COLORS.textDim }} className="tracking-normal">
+            (sign in as owner to act)
+          </span>
+        )}
+      </div>
+      <div className="flex flex-col gap-2">
+        {approvals.map((a) => (
+          <ApprovalCard key={a.id} approval={a} isOwner={isOwner} onAction={handleAction} />
+        ))}
+      </div>
     </div>
   );
 }

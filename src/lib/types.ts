@@ -106,4 +106,55 @@ export interface AgentConfig {
   killed_reason: string | null;
   updated_at: string;
   owner_email: string | null;
+  phase: 'shadow' | 'paper' | 'small_live' | 'scale';
+  paper_mode: boolean;
+  account_cap_usd: number | null;
+  halted: boolean;
+  halt_reason: string | null;
+  halted_at: string | null;
+}
+
+export type AgentApprovalKind =
+  | 'phase_flip'
+  | 'oversize_ticket'
+  | 'new_ticker'
+  | 'unwind_all'
+  | 'resume_after_halt';
+
+export type AgentApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface AgentApproval {
+  id: string;
+  digest_id: string | null;
+  created_at: string;
+  kind: AgentApprovalKind;
+  proposals: AgentProposal[];
+  rationale: string;
+  status: AgentApprovalStatus;
+  approved_at: string | null;
+  approved_by: string | null;
+  expires_at: string;
+  executed: boolean;
+}
+
+export interface AgentOrder {
+  id: string;
+  digest_id: string | null;
+  approval_id: string | null;
+  created_at: string;
+  alpaca_order_id: string | null;
+  ticker: string;
+  instrument: 'equity' | 'put' | 'call' | 'put_spread' | 'call_spread';
+  option_symbol: string | null;
+  side: 'buy' | 'sell';
+  qty: number;
+  order_type: 'market' | 'limit';
+  limit_price: number | null;
+  notional_usd: number | null;
+  status: 'queued' | 'submitted' | 'filled' | 'partially_filled' | 'canceled' | 'rejected' | 'expired';
+  submitted_at: string | null;
+  filled_at: string | null;
+  filled_qty: number | null;
+  filled_avg_price: number | null;
+  rejection_reason: string | null;
 }
