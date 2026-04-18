@@ -130,21 +130,25 @@ Deno.serve(async (req: Request) => {
         reasoner_status: reasoned.status,
       };
     } catch (reasonerErr) {
-      console.error('reasoner failed after retry, using skeleton fallback:', reasonerErr);
+      const errMsg = String(reasonerErr);
+      console.error('reasoner failed after retry, using skeleton fallback:', errMsg);
       digestRow = {
         tick_id: snapshot.tick_id,
         tick_type: tickType,
         phase: result.phase,
         fired_count: result.firedCount,
         kill_switch_triggered: false,
-        narrative: `[Claude unavailable — see dashboard for signal state] ${result.phaseLabel} · ${result.firedCount}/5 signals firing. ${result.playbook}`,
+        // Embed the actual error so it's visible to the dashboard + curl caller.
+        // The error string is truncated in the deadman field already; full raw
+        // text goes in the narrative for operator diagnosis.
+        narrative: `[reasoner failed] ${errMsg.slice(0, 800)}`,
         proposals: [],
         drift_notes: null,
         scorecard: null,
         reasoner_status: 'fallback_unavailable',
       };
       // Bump deadman so 3 consecutive reasoner failures disable the agent.
-      await incrementDeadman(supabase, String(reasonerErr));
+      await incrementDeadman(supabase, errMsg);
     }
 
     const { error: digestError } = await supabase.from('agent_digests').insert(digestRow);
@@ -166,6 +170,10 @@ Deno.serve(async (req: Request) => {
       phase: result.phase,
       fired_count: result.firedCount,
       reasoner_status: digestRow.reasoner_status,
+      // Surface the narrative so fallback reason is visible in the response
+      // without needing to query the DB. For the real narrative this just
+      // returns the first ~400 chars of Claude's output.
+      narrative_preview: String(digestRow.narrative).slice(0, 400),
     });
   } catch (err) {
     console.error('agent-tick failed:', err);
