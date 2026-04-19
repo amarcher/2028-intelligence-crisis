@@ -7,6 +7,7 @@ import ConsumerImpact from './components/sections/ConsumerImpact';
 import FinancialContagion from './components/sections/FinancialContagion';
 import PhaseFlipSignals from './components/sections/PhaseFlipSignals';
 import AgentDigest from './components/sections/AgentDigest';
+import ShippingPulse from './components/sections/ShippingPulse';
 import FeedbackLoop from './components/FeedbackLoop';
 import ClaimTracker from './components/ClaimTracker';
 import Methodology from './components/Methodology';
@@ -23,6 +24,7 @@ export default function Dashboard() {
       <FinancialContagion />
       <PhaseFlipSignals />
       <AgentDigest />
+      <ShippingPulse />
       <FeedbackLoop />
       <ClaimTracker />
       <Methodology />

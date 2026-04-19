@@ -16,6 +16,8 @@ import {
   type PositionSummary,
   type Proposal,
   type RecentDigest,
+  type ShippingPulseSummary,
+  type ShippingReading,
   type TickType,
   type WowSummary,
 } from './reasoner.ts';
@@ -97,6 +99,7 @@ Deno.serve(async (req: Request) => {
     };
 
     const recentDigests = await loadRecentDigests(supabase, MEMORY_DEPTH[tickType]);
+    const shippingPulse = await loadShippingPulse(supabase);
 
     // In auto_execute + non-shadow phase, load Alpaca account state so the
     // reasoner can reason about the actual book (not hallucinate from prior
@@ -157,6 +160,7 @@ Deno.serve(async (req: Request) => {
         recentDigests,
         account: accountSummary,
         positions: positionSummaries,
+        shippingPulse,
       });
 
       digestRow = {
@@ -292,6 +296,92 @@ async function loadSeries(supabase: ReturnType<typeof createClient>, seriesId: s
     .order('date', { ascending: true });
   if (error) throw new Error(`loadSeries(${seriesId}) failed: ${error.message}`);
   return (data ?? []).map((d) => ({ date: d.date as string, value: d.value as number | null }));
+}
+
+// Headline shipping metrics the reasoner should see. Kept compact (~6) to
+// avoid prompt bloat. Add to this list only when a new source earns a seat;
+// agents reason better with focused inputs than with an exhaustive dump.
+const SHIPPING_HEADLINES: Array<{ source: string; metric: string; label: string }> = [
+  { source: 'fbx',  metric: 'global',                        label: 'FBX global composite' },
+  { source: 'fbx',  metric: 'china_ea_to_na_west',           label: 'FBX China → NA West'   },
+  { source: 'fbx',  metric: 'china_ea_to_n_europe',          label: 'FBX China → N.Europe'  },
+  { source: 'bdry', metric: 'close',                         label: 'BDRY (BDI proxy)'      },
+  { source: 'fred', metric: 'retail_inventory_sales_ratio',  label: 'Retail I/S ratio'      },
+  { source: 'fred', metric: 'real_imports_index',            label: 'Real imports index'    },
+];
+
+async function loadShippingPulse(
+  supabase: ReturnType<typeof createClient>,
+): Promise<ShippingPulseSummary | undefined> {
+  try {
+    const [wowRes, statusRes] = await Promise.all([
+      supabase
+        .from('shipping_signals_wow')
+        .select('source, metric, observed_at, value, unit, prev_value, wow_pct')
+        .order('observed_at', { ascending: false })
+        .limit(2000),
+      supabase
+        .from('shipping_signal_source_status')
+        .select('source, fresh'),
+    ]);
+    if (wowRes.error) throw new Error(wowRes.error.message);
+    if (statusRes.error) throw new Error(statusRes.error.message);
+
+    const staleBySource = new Map<string, boolean>();
+    for (const r of statusRes.data ?? []) {
+      staleBySource.set(String(r.source), !r.fresh);
+    }
+
+    // Pick the latest WoW row per (source, metric).
+    const seen = new Set<string>();
+    const latestByKey = new Map<string, {
+      source: string;
+      metric: string;
+      observed_at: string;
+      value: number;
+      unit: string;
+      wow_pct: number | null;
+    }>();
+    for (const r of wowRes.data ?? []) {
+      const key = `${r.source}::${r.metric}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      latestByKey.set(key, {
+        source: String(r.source),
+        metric: String(r.metric),
+        observed_at: String(r.observed_at),
+        value: Number(r.value),
+        unit: String(r.unit),
+        wow_pct: r.wow_pct == null ? null : Number(r.wow_pct),
+      });
+    }
+
+    const readings: ShippingReading[] = [];
+    for (const h of SHIPPING_HEADLINES) {
+      const row = latestByKey.get(`${h.source}::${h.metric}`);
+      if (!row) continue;
+      readings.push({
+        label: h.label,
+        value: row.value,
+        unit: row.unit,
+        wow_pct: row.wow_pct,
+        observed_at: row.observed_at,
+        stale: staleBySource.get(row.source) === true,
+      });
+    }
+
+    if (readings.length === 0) {
+      return { readings: [], healthy: false };
+    }
+    const staleCount = readings.filter((r) => r.stale).length;
+    const healthy = staleCount / readings.length < 0.5;
+    return { readings, healthy };
+  } catch (err) {
+    // Pipeline not deployed yet, or tables missing — fail open so the reasoner
+    // falls back to the pre-Shipping Pulse prompt shape.
+    console.warn('loadShippingPulse failed (non-fatal):', String(err).slice(0, 200));
+    return undefined;
+  }
 }
 
 async function loadRecentDigests(
