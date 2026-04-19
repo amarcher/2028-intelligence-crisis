@@ -54,6 +54,26 @@ export interface AccountSummary {
   buying_power: number;
 }
 
+export interface ShippingReading {
+  /** Human label for the prompt line, e.g. 'FBX global composite'. */
+  label: string;
+  value: number;
+  unit: string;
+  wow_pct: number | null;
+  observed_at: string;
+  /** When the underlying source hasn't been pulled successfully in 14+ days,
+   *  the reading is passed through but flagged. The reasoner should ignore
+   *  stale readings rather than reason off old numbers. */
+  stale: boolean;
+}
+
+export interface ShippingPulseSummary {
+  readings: ShippingReading[];
+  /** Pull-level freshness. If the whole Shipping Pulse pipeline is dead
+   *  (no signals at all, or >50% stale), skip the section in reasoning. */
+  healthy: boolean;
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
@@ -65,6 +85,10 @@ export interface ReasonerInput {
   /** Current Alpaca positions. Present when account is. Empty array means
    *  the account has cash but no positions — different from undefined. */
   positions?: PositionSummary[];
+  /** Weekly container freight + dry bulk + macro import readings. Optional so
+   *  ticks before Phase 1 Shipping Pulse deploy, or when the pipeline is
+   *  down, degrade cleanly to the prior drift-only prompt. */
+  shippingPulse?: ShippingPulseSummary;
 }
 
 export type ProposalAction =
@@ -191,6 +215,18 @@ Each tick receives week-over-week deltas for JOLTS, claims, S&P 500, and Case-Sh
 - **Thesis-aligned** — JOLTS falling, claims rising, S&P falling, Case-Shiller decelerating or falling. Narrative: hold, thesis working. Small adds to existing asymmetric positions are OK; don't initiate new ones on thesis-aligned prints alone.
 - **Counterfactual** — JOLTS rising, claims falling, S&P ripping higher on broadening breadth, Case-Shiller accelerating. Narrative: trim asymmetric exposure up to 10% of current notional; add small to defensive carry (TLT, GLD, XLP).
 - **Mixed / noisy** — one print goes each way. Narrative: hold; note the mixed signal in drift_notes.
+
+## Shipping pulse — corroborator only
+
+When present, the user message includes a "Shipping pulse" block: weekly container freight (Freightos FBX global + key lanes), a dry-bulk ETF proxy (BDRY ≈ Baltic Dry Index), and two FRED macro series (retail inventory/sales ratio, real imports index). These are the physical-economy tell on the thesis — they DO NOT fire Phase-Flip signals and they MUST NOT initiate proposals on their own.
+
+How to use them:
+- **Thesis-aligned read:** FBX global falling + BDRY falling + retail I/S ratio rising (> 1.30 and climbing) = physical slowdown with overstock. Sharpen language in drift_notes ("rates rolling over and shelves filling — thesis corroborated by the physical economy"). Do not rotate positions faster than drift alone would justify.
+- **Counterfactual read:** FBX ripping + BDRY rising + real imports index climbing + I/S ratio flat = physical expansion. Lean harder on "hold" and defensive carry; if drift is also counterfactual, note the double confirmation but keep trims under 10% of notional.
+- **Mixed read:** lanes diverging (e.g. transpacific up, Asia→Europe down) typically reflects routing noise around Red Sea / canal disruptions — not demand. Say so in drift_notes and move on.
+- **Stale readings** (marked \`(stale)\`) should be ignored entirely — scraper was down, don't speculate from old numbers.
+
+Cite shipping evidence in at most one sentence of drift_notes or narrative. Never emit a proposal whose rationale starts with shipping — shipping corroborates drift, it doesn't drive trades. Exception: if 3+ shipping readings all say "counterfactual" for multiple weeks in a row while Phase-Flip signals still show 0 fired, that's a valid reason to trim existing asymmetric exposure further.
 
 ## Memory + ground truth
 
@@ -352,8 +388,42 @@ function renderPositions(positions: PositionSummary[] | undefined): string {
     .join('\n');
 }
 
+function renderShippingPulse(sp: ShippingPulseSummary | undefined): string {
+  if (!sp || !sp.healthy || sp.readings.length === 0) {
+    return '(no shipping pulse data — scraper down or not yet deployed; ignore this channel)';
+  }
+  return sp.readings
+    .map((r) => {
+      const wow =
+        r.wow_pct == null
+          ? 'no prior print'
+          : `${r.wow_pct >= 0 ? '+' : ''}${r.wow_pct.toFixed(2)}% WoW`;
+      const staleTag = r.stale ? ' (stale)' : '';
+      const formatted = formatShippingValue(r.value, r.unit);
+      return `  ${r.label}: ${formatted} (${wow}) · obs ${r.observed_at.slice(0, 10)}${staleTag}`;
+    })
+    .join('\n');
+}
+
+function formatShippingValue(v: number, unit: string): string {
+  switch (unit) {
+    case 'usd_per_40ft':
+      return `$${Math.round(v).toLocaleString()}/40ft`;
+    case 'usd_per_share':
+      return `$${v.toFixed(2)}`;
+    case 'index':
+      return v.toFixed(1);
+    case 'ratio':
+      return v.toFixed(2);
+    case 'usd_bn':
+      return `$${v.toFixed(0)}B`;
+    default:
+      return v.toString();
+  }
+}
+
 export function buildUserMessage(input: ReasonerInput): string {
-  const { tickType, signals, drift, recentDigests, account, positions } = input;
+  const { tickType, signals, drift, recentDigests, account, positions, shippingPulse } = input;
   return `tick_type: ${tickType}
 
 Account: ${renderAccount(account)}
@@ -368,6 +438,9 @@ ${renderWow('JOLTS', drift.jolts)}
 ${renderWow('Initial claims', drift.claims)}
 ${renderWow('S&P 500', drift.sp500)}
 ${renderWow('Case-Shiller national', drift.caseShiller)}${drift.vix ? `\n${renderWow('VIX', drift.vix)}` : ''}
+
+Shipping pulse (corroborator — never initiates a proposal):
+${renderShippingPulse(shippingPulse)}
 
 Recent digests (most-recent first):
 ${renderRecentDigests(recentDigests)}
