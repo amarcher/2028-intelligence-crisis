@@ -1,10 +1,12 @@
-// Alert emails for kills + approvals. Piggybacks on Resend (same secrets
-// as delivery.ts). Distinct subject prefixes so these don't get buried in
-// the daily digest inbox thread.
+// Alert emails + Slack for kills + approvals. Piggybacks on Resend +
+// SLACK_WEBHOOK_URL (same secrets as delivery.ts). Distinct subject prefixes
+// so these don't get buried in the daily digest inbox thread.
 //
-// Both functions never throw — if Resend is unconfigured or the request
-// fails, they return {ok: false, error} and the caller logs it. Kill
-// detection / approval creation is NEVER blocked by alert failures.
+// Functions never throw — if a channel is unconfigured or the request fails,
+// they return {ok: false, error} and the caller logs it. Kill detection /
+// approval creation is NEVER blocked by alert failures. "ok" means at least
+// one channel delivered (matches delivery.ts semantics loosely; caller only
+// cares that *someone* got the alert).
 
 async function postResend(
   subject: string,
@@ -38,6 +40,43 @@ async function postResend(
   } catch (e) {
     return { ok: false, error: String(e).slice(0, 200) };
   }
+}
+
+async function postSlack(
+  subject: string,
+  textBody: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const webhook = Deno.env.get('SLACK_WEBHOOK_URL');
+  if (!webhook) return { ok: false, error: 'slack not configured' };
+  try {
+    const res = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: subject,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: textBody } }],
+      }),
+    });
+    if (!res.ok) {
+      return { ok: false, error: `Slack ${res.status}: ${(await res.text()).slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e).slice(0, 200) };
+  }
+}
+
+async function fanout(
+  subject: string,
+  textBody: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const [email, slack] = await Promise.all([
+    postResend(subject, textBody),
+    postSlack(subject, textBody),
+  ]);
+  if (email.ok || slack.ok) return { ok: true };
+  const errs = [email.error, slack.error].filter(Boolean).join(' | ');
+  return { ok: false, error: errs || 'no channels configured' };
 }
 
 function mdToHtml(md: string): string {
@@ -74,7 +113,7 @@ export async function sendKillAlert(
     `Canceled ${k.canceledOrders} open order${k.canceledOrders === 1 ? '' : 's'}.\n\n` +
     `Owner approval required to resume new entries.` +
     dashboardLink();
-  return postResend(subject, body);
+  return fanout(subject, body);
 }
 
 // ————— approval alert —————
@@ -121,5 +160,5 @@ export async function sendApprovalAlert(
     (proposalLines ? `${a.proposals.length} proposal${a.proposals.length === 1 ? '' : 's'}:\n${proposalLines}\n\n` : '') +
     `Expires in ${a.expiresIn}.` +
     dashboardLink();
-  return postResend(subject, body);
+  return fanout(subject, body);
 }
