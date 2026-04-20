@@ -83,6 +83,19 @@ export interface TapeReading {
   asOf: string;
 }
 
+export interface OptionChainSnapshot {
+  ticker: string;
+  /** Human-friendly expiry tag matching what the reasoner writes as
+   *  proposal.expiry (e.g. 'Jan 2027'). */
+  expiry: string;
+  type: 'put' | 'call';
+  /** Listed strike prices for this underlying/expiry/type, sorted ascending.
+   *  Scoped to a roughly useful window around spot (~40–110% of tape) to
+   *  keep the prompt compact — deep LEAPS chains are often sparse, so this
+   *  tells the reasoner what's actually tradable vs. what it must invent. */
+  strikes: number[];
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
@@ -102,6 +115,11 @@ export interface ReasonerInput {
    *  + non-shadow + Alpaca credentials resolve. Lets the reasoner anchor
    *  option strike guesses to real spot, instead of hallucinating a level. */
   tapeQuotes?: TapeReading[];
+  /** Listed option-chain strikes for the SaaS short LEAPS universe so the
+   *  reasoner picks strikes that actually exist. When a ticker's chain isn't
+   *  here (fetch failed or ticker outside the pre-load set) the reasoner
+   *  falls back to tape-anchored guessing. */
+  optionChains?: OptionChainSnapshot[];
 }
 
 export type ProposalAction =
@@ -269,7 +287,7 @@ Use prior digests to:
 1. First, check for kill-switch conditions using the Phase-Flip signals data you receive. If ≥ 2 anti-thesis signals fire, emit ONE \`unwind_all\` proposal (ticker: 'SPY' as sentinel, instrument: 'equity', rationale: which 2+ anti-thesis signals fired) and stop — no other proposals, narrative explains the kill-switch.
 2. Determine phase from \`fired_count\` (0–1 = Phase 1; 2+ = Phase 2; note if it flipped since the last digest).
 3. Classify drift.
-4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, and urgency. No timestamps, no limit prices. Option proposals (put/call/put_spread/call_spread) MUST include a concrete numeric \`strike\` and an \`expiry\` like 'Jan 2027'. Anchor the strike to the "Current tape" block in the user message — that's the latest-trade price per whitelist equity. For a ~25% OTM LEAPS put on a name the tape shows at $940, take 940 × 0.75 = 705 and round to the nearest $5 / $10 chain increment → strike 700. The executor picks the actual OCC contract from the live chain inside a tight ±5% window, so your strike must land close to a listed one. If the tape block is missing for a ticker (not in the snapshot), fall back to your best estimate but note that in the rationale.
+4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, and urgency. No timestamps, no limit prices. Option proposals (put/call/put_spread/call_spread) MUST include a concrete numeric \`strike\` and an \`expiry\` like 'Jan 2027'. Anchor strikes to the "Current tape" block (latest-trade price per whitelist equity). When the "Available option chains" block lists strikes for your underlying/expiry/type, you MUST pick one of the listed numbers — do not invent a strike that isn't on the listing. Workflow: compute your intended %OTM target from tape (e.g. tape $940 × 0.75 = $705 for a 25% OTM put), then pick the closest listed strike (e.g. 700). If the listed chain doesn't have a strike near your target (gap > 10% of tape), **amend the plan** — either pick the closest listed strike and describe the revised %OTM in the rationale, or drop the proposal and use a different underlying with a denser chain. The executor resolves the OCC contract inside a tight ±5% window, so your strike must match a listing. If no chain is listed for your ticker (fallback — e.g. credit shorts outside the pre-loaded set), anchor to tape and round to $5 / $10, but flag the guess in the rationale.
 5. \`narrative\`: 2–3 sentences, action-first. Say where we are ("Phase 1 · signal count unchanged"), then what matters ("JOLTS inched lower; keep the LEAPS book; no action").
 6. \`drift_notes\`: one sentence on the week-over-week read, or null if nothing noteworthy.
 7. If tick_type is 'weekly', emit a scorecard: for each of jolts, claims, saas, sp500, housing — mark 'fired', 'pending', or 'reversed' (fired previously but no longer).
@@ -422,6 +440,20 @@ function renderPositions(positions: PositionSummary[] | undefined): string {
     .join('\n');
 }
 
+function renderOptionChains(chains: OptionChainSnapshot[] | undefined): string {
+  if (!chains || chains.length === 0) {
+    return '(not provided — use tape + %OTM heuristic to guess a strike)';
+  }
+  return chains
+    .map((c) => {
+      if (c.strikes.length === 0) {
+        return `  ${c.ticker} ${c.expiry} ${c.type}: (no listed strikes in window)`;
+      }
+      return `  ${c.ticker} ${c.expiry} ${c.type}: ${c.strikes.join(', ')}`;
+    })
+    .join('\n');
+}
+
 function renderTape(tape: TapeReading[] | undefined): string {
   if (tape === undefined) return '(not provided — signal-only mode)';
   if (tape.length === 0) return '(no tape readings resolved)';
@@ -472,6 +504,7 @@ function formatShippingValue(v: number, unit: string): string {
 export function buildUserMessage(input: ReasonerInput): string {
   const {
     tickType, signals, drift, recentDigests, account, positions, shippingPulse, tapeQuotes,
+    optionChains,
   } = input;
   return `tick_type: ${tickType}
 
@@ -481,6 +514,9 @@ ${renderPositions(positions)}
 
 Current tape (latest trade per whitelist equity — use to anchor option strikes):
 ${renderTape(tapeQuotes)}
+
+Available option chains (listed strikes — pick from these; if your %OTM target sits between two listed strikes, choose the closer one or amend the plan):
+${renderOptionChains(optionChains)}
 
 Current signal state (${signals.firedCount}/5 firing · phase: ${signals.phase}):
 ${signals.signals.map(renderSignal).join('\n')}
