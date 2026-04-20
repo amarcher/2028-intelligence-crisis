@@ -141,6 +141,62 @@ const KIND_URGENCY: Record<ApprovalAlertInput['kind'], string> = {
   resume_after_halt: '[RESUME HALT]',
 };
 
+// ————— trade-placed alert —————
+
+export interface TradeAlertInput {
+  action: string;          // 'open', 'add', 'trim', 'close', 'roll'
+  side: 'buy' | 'sell';
+  ticker: string;
+  instrument: string;      // 'equity' | 'put' | 'call' | 'put_spread' | 'call_spread'
+  option_symbol?: string | null;  // OCC symbol when instrument is an option
+  expiry?: string | null;
+  strike?: number | null;
+  qty: number;
+  /** Estimated dollar notional — guardrail-decided amount, not the fill. Market
+   *  orders fill after submission; exact fill shows up in the next digest /
+   *  daily report. */
+  notional_usd: number | null;
+  rationale: string;
+  exit_condition: string;
+  alpaca_order_id?: string;
+}
+
+const STANDING_GUARDS =
+  'Standing guards: kill-switch fires at ≥2 anti-thesis signals · daily loss stop −4% of equity';
+
+export async function sendTradeAlert(
+  t: TradeAlertInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const instrLabel =
+    t.instrument === 'equity'
+      ? ''
+      : ` ${t.instrument.replace('_', ' ').toUpperCase()}`;
+  const ex = t.expiry ? ` ${t.expiry}` : '';
+  const str = t.strike != null ? ` @${t.strike}` : '';
+  const actionLabel = `${t.action.toUpperCase()} · ${t.side.toUpperCase()}`;
+  const sizeLabel =
+    t.instrument === 'equity'
+      ? `${t.qty} sh`
+      : `${t.qty} contract${t.qty === 1 ? '' : 's'}`;
+  const notionalLabel =
+    t.notional_usd != null ? `~$${Math.round(t.notional_usd).toLocaleString('en-US')}` : 'market';
+
+  const subject = `✅ [2028 AGENT] ${actionLabel} ${t.ticker}${instrLabel}${ex}${str} — ${sizeLabel} (${notionalLabel})`;
+
+  const idLine = t.alpaca_order_id ? `\nOrder ID: \`${t.alpaca_order_id}\`` : '';
+  const occ = t.option_symbol ? `\nOCC symbol: \`${t.option_symbol}\`` : '';
+
+  const body =
+    `*${actionLabel} ${t.ticker}${instrLabel}${ex}${str}*\n` +
+    `Size: ${sizeLabel} · notional: ${notionalLabel}${occ}${idLine}\n\n` +
+    `*Why:* ${t.rationale}\n` +
+    `*Exit:* ${t.exit_condition}\n\n` +
+    `_${STANDING_GUARDS}_` +
+    dashboardLink();
+
+  return fanout(subject, body);
+}
+
 export async function sendApprovalAlert(
   a: ApprovalAlertInput,
 ): Promise<{ ok: boolean; error?: string }> {

@@ -158,6 +158,10 @@ export interface Proposal {
   strike: number | null;
   size_hint: ProposalSizeHint;
   rationale: string;
+  /** One concrete sentence on what ends this position — trigger (signal flip,
+   *  price level, drift reversal) or time-based (roll / expiry). For close /
+   *  unwind proposals this describes the closing rationale. */
+  exit_condition: string;
   urgency: ProposalUrgency;
   /** Populated by the soft-guardrail filter when a proposal violates the
    *  playbook rules (off-whitelist, near-dated single-name short, etc.).
@@ -287,7 +291,7 @@ Use prior digests to:
 1. First, check for kill-switch conditions using the Phase-Flip signals data you receive. If ≥ 2 anti-thesis signals fire, emit ONE \`unwind_all\` proposal (ticker: 'SPY' as sentinel, instrument: 'equity', rationale: which 2+ anti-thesis signals fired) and stop — no other proposals, narrative explains the kill-switch.
 2. Determine phase from \`fired_count\` (0–1 = Phase 1; 2+ = Phase 2; note if it flipped since the last digest).
 3. Classify drift.
-4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, and urgency. No timestamps, no limit prices. Option proposals (put/call/put_spread/call_spread) MUST include a concrete numeric \`strike\` and an \`expiry\` like 'Jan 2027'. Anchor strikes to the "Current tape" block (latest-trade price per whitelist equity). When the "Available option chains" block lists strikes for your underlying/expiry/type, you MUST pick one of the listed numbers — do not invent a strike that isn't on the listing. Workflow: compute your intended %OTM target from tape (e.g. tape $940 × 0.75 = $705 for a 25% OTM put), then pick the closest listed strike (e.g. 700). If the listed chain doesn't have a strike near your target (gap > 10% of tape), **amend the plan** — either pick the closest listed strike and describe the revised %OTM in the rationale, or drop the proposal and use a different underlying with a denser chain. The executor resolves the OCC contract inside a tight ±5% window, so your strike must match a listing. If no chain is listed for your ticker (fallback — e.g. credit shorts outside the pre-loaded set), anchor to tape and round to $5 / $10, but flag the guess in the rationale.
+4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, a concrete \`exit_condition\` (one sentence naming the trigger — signal flip, price level, drift reversal, or time-based roll/expiry), and urgency. No timestamps, no limit prices. Option proposals (put/call/put_spread/call_spread) MUST include a concrete numeric \`strike\` and an \`expiry\` like 'Jan 2027'. Anchor strikes to the "Current tape" block (latest-trade price per whitelist equity). When the "Available option chains" block lists strikes for your underlying/expiry/type, you MUST pick one of the listed numbers — do not invent a strike that isn't on the listing. Workflow: compute your intended %OTM target from tape (e.g. tape $940 × 0.75 = $705 for a 25% OTM put), then pick the closest listed strike (e.g. 700). If the listed chain doesn't have a strike near your target (gap > 10% of tape), **amend the plan** — either pick the closest listed strike and describe the revised %OTM in the rationale, or drop the proposal and use a different underlying with a denser chain. The executor resolves the OCC contract inside a tight ±5% window, so your strike must match a listing. If no chain is listed for your ticker (fallback — e.g. credit shorts outside the pre-loaded set), anchor to tape and round to $5 / $10, but flag the guess in the rationale.
 5. \`narrative\`: 2–3 sentences, action-first. Say where we are ("Phase 1 · signal count unchanged"), then what matters ("JOLTS inched lower; keep the LEAPS book; no action").
 6. \`drift_notes\`: one sentence on the week-over-week read, or null if nothing noteworthy.
 7. If tick_type is 'weekly', emit a scorecard: for each of jolts, claims, saas, sp500, housing — mark 'fired', 'pending', or 'reversed' (fired previously but no longer).
@@ -361,12 +365,17 @@ const TOOL: AnthropicTool = {
               description:
                 'Concrete justification tied to a specific signal or drift pattern. No more than ~2 sentences.',
             },
+            exit_condition: {
+              type: 'string',
+              description:
+                "One sentence on what triggers exiting this position — e.g. 'close if NOW breaks above $1050 (SaaS guide-down thesis invalidated)' or 'ride through 2027 expiry unless ≥2 anti-thesis signals fire first'. For close/trim/unwind proposals, describe the closing rationale. Avoid vague phrases like 'when it works' — give a concrete trigger the operator can verify.",
+            },
             urgency: {
               type: 'string',
               enum: ['act_today', 'this_week', 'waiting_for_trigger'],
             },
           },
-          required: ['action', 'ticker', 'instrument', 'size_hint', 'rationale', 'urgency'],
+          required: ['action', 'ticker', 'instrument', 'size_hint', 'rationale', 'exit_condition', 'urgency'],
           additionalProperties: false,
           allOf: [
             {
