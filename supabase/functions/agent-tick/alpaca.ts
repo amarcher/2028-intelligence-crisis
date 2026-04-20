@@ -229,6 +229,36 @@ export async function cancelAllOrders(
   );
 }
 
+// ————— equity quotes (latest-trade snapshot used for strike anchoring) —————
+
+export interface LatestTrade {
+  ticker: string;
+  price: number;
+  asOf: string;   // ISO timestamp from the exchange tape
+}
+
+/** Batch-fetch latest trade prices for equity symbols. Uses Alpaca's data API
+ *  (data.alpaca.markets) which is separate from trading. Safe across paper/live.
+ *  Returns a map keyed by ticker; missing symbols (e.g. illiquid, bad feed) are
+ *  simply absent rather than thrown — the caller degrades gracefully. */
+export async function getLatestTrades(
+  c: AlpacaCredentials,
+  symbols: readonly string[],
+): Promise<LatestTrade[]> {
+  if (symbols.length === 0) return [];
+  const qs = new URLSearchParams({ symbols: symbols.join(',') });
+  const raw = await req<{ trades: Record<string, { p: number; t: string }> }>(
+    c, 'GET', DATA_BASE, `/v2/stocks/trades/latest?${qs.toString()}`,
+  );
+  const out: LatestTrade[] = [];
+  for (const [ticker, t] of Object.entries(raw.trades ?? {})) {
+    if (t && typeof t.p === 'number' && t.p > 0) {
+      out.push({ ticker, price: t.p, asOf: String(t.t) });
+    }
+  }
+  return out;
+}
+
 // ————— options data (minimal — used by reasoner for chain awareness) —————
 
 export interface OptionContract {

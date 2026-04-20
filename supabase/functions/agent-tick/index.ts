@@ -18,10 +18,12 @@ import {
   type RecentDigest,
   type ShippingPulseSummary,
   type ShippingReading,
+  type TapeReading,
   type TickType,
   type WowSummary,
 } from './reasoner.ts';
-import { alpacaFromEnv, getAccount, getPositions } from './alpaca.ts';
+import { alpacaFromEnv, getAccount, getLatestTrades, getPositions } from './alpaca.ts';
+import { WHITELIST } from './filter.ts';
 import { deliverDigest } from './delivery.ts';
 import {
   orchestrateExecution,
@@ -107,10 +109,21 @@ Deno.serve(async (req: Request) => {
     // fall through to signal-only reasoning without failing the tick.
     let accountSummary: AccountSummary | undefined;
     let positionSummaries: PositionSummary[] | undefined;
+    let tapeQuotes: TapeReading[] | undefined;
     if (config.mode === 'auto_execute' && config.phase !== 'shadow') {
       try {
         const creds = alpacaFromEnv();
-        const [acct, pos] = await Promise.all([getAccount(creds), getPositions(creds)]);
+        const [acct, pos, tape] = await Promise.all([
+          getAccount(creds),
+          getPositions(creds),
+          // Latest-trade snapshot so the reasoner can anchor option strikes
+          // to real spot. Fails soft: if the data feed 5xxs, quotes stay
+          // undefined and the reasoner uses the fallback instruction.
+          getLatestTrades(creds, WHITELIST).catch((e) => {
+            console.warn('getLatestTrades failed (non-fatal):', String(e).slice(0, 200));
+            return [] as TapeReading[];
+          }),
+        ]);
         accountSummary = {
           equity: acct.equity,
           cash: acct.cash,
@@ -125,6 +138,7 @@ Deno.serve(async (req: Request) => {
           market_value: p.market_value,
           unrealized_pl: p.unrealized_pl,
         }));
+        tapeQuotes = tape;
       } catch (e) {
         console.warn('Alpaca state load failed (non-fatal):', String(e).slice(0, 200));
       }
@@ -161,6 +175,7 @@ Deno.serve(async (req: Request) => {
         account: accountSummary,
         positions: positionSummaries,
         shippingPulse,
+        tapeQuotes,
       });
 
       digestRow = {
