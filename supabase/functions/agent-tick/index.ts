@@ -13,15 +13,69 @@ import {
   runReasoner,
   type AccountSummary,
   type DriftSummary,
+  type OptionChainSnapshot,
   type PositionSummary,
   type Proposal,
   type RecentDigest,
   type ShippingPulseSummary,
   type ShippingReading,
+  type TapeReading,
   type TickType,
   type WowSummary,
 } from './reasoner.ts';
-import { alpacaFromEnv, getAccount, getPositions } from './alpaca.ts';
+import {
+  alpacaFromEnv,
+  getAccount,
+  getLatestTrades,
+  getOptionsChain,
+  getPositions,
+  type AlpacaCredentials,
+} from './alpaca.ts';
+import { WHITELIST } from './filter.ts';
+
+// SaaS short underliers we pre-fetch a Jan 2027 put chain for on each tick so
+// the reasoner picks strikes from real listings instead of guessing. Must be
+// a subset of WHITELIST; keep small — one chain call per ticker per tick.
+const LEAPS_UNIVERSE: ReadonlyArray<{ ticker: string; expiry: string; expiryIso: [string, string]; type: 'put' | 'call' }> = [
+  { ticker: 'NOW',  expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
+  { ticker: 'CRM',  expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
+  { ticker: 'HUBS', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
+  { ticker: 'WDAY', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
+  { ticker: 'DDOG', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
+  { ticker: 'FRSH', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
+];
+
+async function loadOptionChainSnapshots(
+  creds: AlpacaCredentials,
+  tapeByTicker: Map<string, number>,
+): Promise<OptionChainSnapshot[]> {
+  const snapshots = await Promise.all(
+    LEAPS_UNIVERSE.map(async (cfg): Promise<OptionChainSnapshot | null> => {
+      try {
+        const spot = tapeByTicker.get(cfg.ticker);
+        const chain = await getOptionsChain(creds, cfg.ticker, {
+          type: cfg.type,
+          expiration_date_gte: cfg.expiryIso[0],
+          expiration_date_lte: cfg.expiryIso[1],
+          // Filter to the reasonably-tradable strike window when we have spot,
+          // otherwise return the default page.
+          strike_price_gte: spot != null ? spot * 0.4 : undefined,
+          strike_price_lte: spot != null ? spot * 1.1 : undefined,
+          limit: 100,
+        });
+        if (chain.length === 0) {
+          return { ticker: cfg.ticker, expiry: cfg.expiry, type: cfg.type, strikes: [] };
+        }
+        const strikes = [...new Set(chain.map((c) => c.strike_price))].sort((a, b) => a - b);
+        return { ticker: cfg.ticker, expiry: cfg.expiry, type: cfg.type, strikes };
+      } catch (e) {
+        console.warn(`chain fetch ${cfg.ticker} failed (non-fatal):`, String(e).slice(0, 200));
+        return null;
+      }
+    }),
+  );
+  return snapshots.filter((s): s is OptionChainSnapshot => s !== null);
+}
 import { deliverDigest } from './delivery.ts';
 import {
   orchestrateExecution,
@@ -107,10 +161,22 @@ Deno.serve(async (req: Request) => {
     // fall through to signal-only reasoning without failing the tick.
     let accountSummary: AccountSummary | undefined;
     let positionSummaries: PositionSummary[] | undefined;
+    let tapeQuotes: TapeReading[] | undefined;
+    let optionChains: OptionChainSnapshot[] | undefined;
     if (config.mode === 'auto_execute' && config.phase !== 'shadow') {
       try {
         const creds = alpacaFromEnv();
-        const [acct, pos] = await Promise.all([getAccount(creds), getPositions(creds)]);
+        const [acct, pos, tape] = await Promise.all([
+          getAccount(creds),
+          getPositions(creds),
+          // Latest-trade snapshot so the reasoner can anchor option strikes
+          // to real spot. Fails soft: if the data feed 5xxs, quotes stay
+          // undefined and the reasoner uses the fallback instruction.
+          getLatestTrades(creds, WHITELIST).catch((e) => {
+            console.warn('getLatestTrades failed (non-fatal):', String(e).slice(0, 200));
+            return [] as TapeReading[];
+          }),
+        ]);
         accountSummary = {
           equity: acct.equity,
           cash: acct.cash,
@@ -125,6 +191,12 @@ Deno.serve(async (req: Request) => {
           market_value: p.market_value,
           unrealized_pl: p.unrealized_pl,
         }));
+        tapeQuotes = tape;
+        // Now that we have tape, fetch listed strikes for the SaaS LEAPS
+        // universe so the reasoner picks strikes that actually exist.
+        // Ordered after the parallel batch because the chain window uses spot.
+        const tapeByTicker = new Map(tape.map((t) => [t.ticker, t.price] as const));
+        optionChains = await loadOptionChainSnapshots(creds, tapeByTicker);
       } catch (e) {
         console.warn('Alpaca state load failed (non-fatal):', String(e).slice(0, 200));
       }
@@ -161,6 +233,8 @@ Deno.serve(async (req: Request) => {
         account: accountSummary,
         positions: positionSummaries,
         shippingPulse,
+        tapeQuotes,
+        optionChains,
       });
 
       digestRow = {

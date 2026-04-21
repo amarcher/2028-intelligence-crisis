@@ -74,6 +74,28 @@ export interface ShippingPulseSummary {
   healthy: boolean;
 }
 
+export interface TapeReading {
+  ticker: string;
+  price: number;
+  /** ISO timestamp from the exchange tape. Can be a Friday close on Monday
+   *  premarket ticks — that's fine for strike anchoring (executor's chain
+   *  window is ±5%, so a small overnight move doesn't shift the pick). */
+  asOf: string;
+}
+
+export interface OptionChainSnapshot {
+  ticker: string;
+  /** Human-friendly expiry tag matching what the reasoner writes as
+   *  proposal.expiry (e.g. 'Jan 2027'). */
+  expiry: string;
+  type: 'put' | 'call';
+  /** Listed strike prices for this underlying/expiry/type, sorted ascending.
+   *  Scoped to a roughly useful window around spot (~40–110% of tape) to
+   *  keep the prompt compact — deep LEAPS chains are often sparse, so this
+   *  tells the reasoner what's actually tradable vs. what it must invent. */
+  strikes: number[];
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
@@ -89,6 +111,15 @@ export interface ReasonerInput {
    *  ticks before Phase 1 Shipping Pulse deploy, or when the pipeline is
    *  down, degrade cleanly to the prior drift-only prompt. */
   shippingPulse?: ShippingPulseSummary;
+  /** Latest-trade snapshots for whitelist equities. Present when auto_execute
+   *  + non-shadow + Alpaca credentials resolve. Lets the reasoner anchor
+   *  option strike guesses to real spot, instead of hallucinating a level. */
+  tapeQuotes?: TapeReading[];
+  /** Listed option-chain strikes for the SaaS short LEAPS universe so the
+   *  reasoner picks strikes that actually exist. When a ticker's chain isn't
+   *  here (fetch failed or ticker outside the pre-load set) the reasoner
+   *  falls back to tape-anchored guessing. */
+  optionChains?: OptionChainSnapshot[];
 }
 
 export type ProposalAction =
@@ -127,6 +158,10 @@ export interface Proposal {
   strike: number | null;
   size_hint: ProposalSizeHint;
   rationale: string;
+  /** One concrete sentence on what ends this position — trigger (signal flip,
+   *  price level, drift reversal) or time-based (roll / expiry). For close /
+   *  unwind proposals this describes the closing rationale. */
+  exit_condition: string;
   urgency: ProposalUrgency;
   /** Populated by the soft-guardrail filter when a proposal violates the
    *  playbook rules (off-whitelist, near-dated single-name short, etc.).
@@ -234,7 +269,7 @@ You receive the last 3 digests (or 8 on weekly ticks) plus — when the agent is
 
 **Empty-book case.** If the user message says \`Current positions: (none — cash-only account)\`, the Phase 1 book does NOT exist yet and must be OPENED, not held. Emit starter \`open\` proposals for the Phase 1 starter book:
 
-- SaaS LEAPS puts (Jan 2027, 20–30% OTM) on 3–5 of: NOW, CRM, HUBS, WDAY, DDOG — starter size each
+- SaaS LEAPS puts (Jan 2027, 20–30% OTM) on 3–5 of: NOW, CRM, HUBS, WDAY, DDOG — starter size each. Emit a concrete numeric \`strike\` on each (round to a standard chain increment, e.g. $5 or $10).
 - Defensive equity: TLT, GLD, XLP — starter size each
 - Small AI-bubble equity: QQQ or NVDA — starter size
 
@@ -256,7 +291,7 @@ Use prior digests to:
 1. First, check for kill-switch conditions using the Phase-Flip signals data you receive. If ≥ 2 anti-thesis signals fire, emit ONE \`unwind_all\` proposal (ticker: 'SPY' as sentinel, instrument: 'equity', rationale: which 2+ anti-thesis signals fired) and stop — no other proposals, narrative explains the kill-switch.
 2. Determine phase from \`fired_count\` (0–1 = Phase 1; 2+ = Phase 2; note if it flipped since the last digest).
 3. Classify drift.
-4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, and urgency. No timestamps, no prices — this is a human-readable digest, not a trade ticket.
+4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, a concrete \`exit_condition\` (one sentence naming the trigger — signal flip, price level, drift reversal, or time-based roll/expiry), and urgency. No timestamps, no limit prices. Option proposals (put/call/put_spread/call_spread) MUST include a concrete numeric \`strike\` and an \`expiry\` like 'Jan 2027'. Anchor strikes to the "Current tape" block (latest-trade price per whitelist equity). When the "Available option chains" block lists strikes for your underlying/expiry/type, you MUST pick one of the listed numbers — do not invent a strike that isn't on the listing. Workflow: compute your intended %OTM target from tape (e.g. tape $940 × 0.75 = $705 for a 25% OTM put), then pick the closest listed strike (e.g. 700). If the listed chain doesn't have a strike near your target (gap > 10% of tape), **amend the plan** — either pick the closest listed strike and describe the revised %OTM in the rationale, or drop the proposal and use a different underlying with a denser chain. The executor resolves the OCC contract inside a tight ±5% window, so your strike must match a listing. If no chain is listed for your ticker (fallback — e.g. credit shorts outside the pre-loaded set), anchor to tape and round to $5 / $10, but flag the guess in the rationale.
 5. \`narrative\`: 2–3 sentences, action-first. Say where we are ("Phase 1 · signal count unchanged"), then what matters ("JOLTS inched lower; keep the LEAPS book; no action").
 6. \`drift_notes\`: one sentence on the week-over-week read, or null if nothing noteworthy.
 7. If tick_type is 'weekly', emit a scorecard: for each of jolts, claims, saas, sp500, housing — mark 'fired', 'pending', or 'reversed' (fired previously but no longer).
@@ -313,9 +348,14 @@ const TOOL: AnthropicTool = {
             },
             expiry: {
               type: ['string', 'null'],
-              description: "e.g., 'Jan 2027'. Null for equities or indeterminate.",
+              description:
+                "e.g., 'Jan 2027'. Required for option instruments. Null only for equity.",
             },
-            strike: { type: ['number', 'null'] },
+            strike: {
+              type: ['number', 'null'],
+              description:
+                'Numeric strike in USD. Required for option instruments — pick a concrete strike near your target %OTM (round to standard $2.50 / $5 / $10 chain increments). Null only for equity.',
+            },
             size_hint: {
               type: 'string',
               enum: ['starter', 'half', 'full', 'trim_third', 'trim_half'],
@@ -325,13 +365,34 @@ const TOOL: AnthropicTool = {
               description:
                 'Concrete justification tied to a specific signal or drift pattern. No more than ~2 sentences.',
             },
+            exit_condition: {
+              type: 'string',
+              description:
+                "One sentence on what triggers exiting this position — e.g. 'close if NOW breaks above $1050 (SaaS guide-down thesis invalidated)' or 'ride through 2027 expiry unless ≥2 anti-thesis signals fire first'. For close/trim/unwind proposals, describe the closing rationale. Avoid vague phrases like 'when it works' — give a concrete trigger the operator can verify.",
+            },
             urgency: {
               type: 'string',
               enum: ['act_today', 'this_week', 'waiting_for_trigger'],
             },
           },
-          required: ['action', 'ticker', 'instrument', 'size_hint', 'rationale', 'urgency'],
+          required: ['action', 'ticker', 'instrument', 'size_hint', 'rationale', 'exit_condition', 'urgency'],
           additionalProperties: false,
+          allOf: [
+            {
+              if: {
+                properties: {
+                  instrument: { enum: ['put', 'call', 'put_spread', 'call_spread'] },
+                },
+              },
+              then: {
+                required: ['expiry', 'strike'],
+                properties: {
+                  expiry: { type: 'string' },
+                  strike: { type: 'number' },
+                },
+              },
+            },
+          ],
         },
       },
       scorecard: {
@@ -388,6 +449,33 @@ function renderPositions(positions: PositionSummary[] | undefined): string {
     .join('\n');
 }
 
+function renderOptionChains(chains: OptionChainSnapshot[] | undefined): string {
+  if (!chains || chains.length === 0) {
+    return '(not provided — use tape + %OTM heuristic to guess a strike)';
+  }
+  return chains
+    .map((c) => {
+      if (c.strikes.length === 0) {
+        return `  ${c.ticker} ${c.expiry} ${c.type}: (no listed strikes in window)`;
+      }
+      return `  ${c.ticker} ${c.expiry} ${c.type}: ${c.strikes.join(', ')}`;
+    })
+    .join('\n');
+}
+
+function renderTape(tape: TapeReading[] | undefined): string {
+  if (tape === undefined) return '(not provided — signal-only mode)';
+  if (tape.length === 0) return '(no tape readings resolved)';
+  // Group four per line to keep the prompt compact on a 40+-ticker whitelist.
+  const cells = tape.map((t) => `${t.ticker} $${t.price.toFixed(2)}`);
+  const lines: string[] = [];
+  for (let i = 0; i < cells.length; i += 4) {
+    lines.push('  ' + cells.slice(i, i + 4).join(' · '));
+  }
+  const asOf = tape[0]?.asOf?.slice(0, 16).replace('T', ' ') ?? 'unknown';
+  return `${lines.join('\n')}\n  (snapshot asOf ${asOf}Z)`;
+}
+
 function renderShippingPulse(sp: ShippingPulseSummary | undefined): string {
   if (!sp || !sp.healthy || sp.readings.length === 0) {
     return '(no shipping pulse data — scraper down or not yet deployed; ignore this channel)';
@@ -423,12 +511,21 @@ function formatShippingValue(v: number, unit: string): string {
 }
 
 export function buildUserMessage(input: ReasonerInput): string {
-  const { tickType, signals, drift, recentDigests, account, positions, shippingPulse } = input;
+  const {
+    tickType, signals, drift, recentDigests, account, positions, shippingPulse, tapeQuotes,
+    optionChains,
+  } = input;
   return `tick_type: ${tickType}
 
 Account: ${renderAccount(account)}
 Current positions:
 ${renderPositions(positions)}
+
+Current tape (latest trade per whitelist equity — use to anchor option strikes):
+${renderTape(tapeQuotes)}
+
+Available option chains (listed strikes — pick from these; if your %OTM target sits between two listed strikes, choose the closer one or amend the plan):
+${renderOptionChains(optionChains)}
 
 Current signal state (${signals.firedCount}/5 firing · phase: ${signals.phase}):
 ${signals.signals.map(renderSignal).join('\n')}
@@ -541,6 +638,19 @@ async function callOnce(apiKey: string, input: ReasonerInput): Promise<ReasonerO
     proposals: Proposal[];
     scorecard?: Record<string, 'fired' | 'pending' | 'reversed'> | null;
   };
+
+  // Option proposals need a concrete strike + expiry so the executor can pick
+  // a real OCC contract. Schema enforces this via allOf/if-then but belt-and-
+  // suspenders: throw here so runReasoner's retry kicks in with fresh sampling.
+  const OPTION_INSTRUMENTS = new Set(['put', 'call', 'put_spread', 'call_spread']);
+  const badOption = (out.proposals ?? []).find(
+    (p) => OPTION_INSTRUMENTS.has(p.instrument) && (p.strike == null || !p.expiry),
+  );
+  if (badOption) {
+    throw new Error(
+      `reasoner: option proposal missing strike/expiry (${badOption.ticker} ${badOption.instrument} expiry=${badOption.expiry ?? 'null'} strike=${badOption.strike ?? 'null'})`,
+    );
+  }
 
   // Soft-guardrail filter: annotates proposals that violate playbook rules
   // with filter_flags[]. Never drops or silently alters — always passes through

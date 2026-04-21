@@ -38,7 +38,7 @@ import {
   type PriorOrderSummary,
 } from './guardrails.ts';
 import type { Proposal } from './reasoner.ts';
-import { sendApprovalAlert } from './alerts.ts';
+import { sendApprovalAlert, sendTradeAlert } from './alerts.ts';
 
 export type ExecutionConfig = GuardrailContext['config'];
 
@@ -383,6 +383,25 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
         submitted_at: orderRes.submitted_at,
         raw_alpaca: orderRes,
       });
+      // Per-trade Slack/email alert — fire-and-forget. Never blocks execution;
+      // failure just adds a non-fatal entry to errors[] so the tick keeps going.
+      const alertRes = await sendTradeAlert({
+        action: p.action,
+        side,
+        ticker: p.ticker,
+        instrument: p.instrument,
+        option_symbol: optionSymbol,
+        expiry: p.expiry,
+        strike: p.strike,
+        qty,
+        notional_usd: decision.notional,
+        rationale: p.rationale,
+        exit_condition: p.exit_condition,
+        alpaca_order_id: orderRes.id,
+      });
+      if (!alertRes.ok) {
+        errors.push(`trade alert ${p.ticker}: ${alertRes.error ?? 'unknown'}`);
+      }
       placed++;
     } catch (e) {
       const errMsg = String(e).slice(0, 400);

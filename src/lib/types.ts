@@ -69,6 +69,9 @@ export interface AgentProposal {
   strike?: number | null;
   size_hint: 'starter' | 'half' | 'full' | 'trim_third' | 'trim_half';
   rationale: string;
+  /** One-sentence exit trigger for this position. Optional on older digest
+   *  rows persisted before the field was added — newer ticks always emit it. */
+  exit_condition?: string;
   urgency: 'act_today' | 'this_week' | 'waiting_for_trigger';
   /** Populated by the Edge Function filter when a proposal violates playbook
    *  rules (off-whitelist, near-dated SaaS short, leveraged inverse without
