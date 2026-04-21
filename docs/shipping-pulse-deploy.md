@@ -111,7 +111,21 @@ SELECT * FROM cron.job WHERE jobname = 'shipping-pulse-pull';
 SELECT * FROM cron.job_run_details
  WHERE jobid IN (SELECT jobid FROM cron.job WHERE jobname = 'shipping-pulse-pull')
  ORDER BY start_time DESC LIMIT 10;
+
+-- cron.job_run_details.status = 'succeeded' only means pg_net enqueued the
+-- HTTP request. The actual Edge Function response lives here:
+SELECT id, status_code, created, left(coalesce(content,''), 200) AS body
+FROM net._http_response
+WHERE created > now() - interval '1 hour'
+ORDER BY created DESC;
 ```
+
+Every cron-triggered Edge Function must POST with an `Authorization: Bearer
+<service_role_jwt>` header or the gateway returns 401
+`UNAUTHORIZED_NO_AUTH_HEADER`. `012_shipping_pulse_cron.sql` was fixed
+forward by `014_cron_auth_header.sql`, which reads the JWT from
+`supabase_vault` at run time so the secret stays out of git. New cron
+migrations should follow the same vault-read pattern.
 
 ## What's deferred
 
