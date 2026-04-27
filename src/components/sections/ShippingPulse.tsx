@@ -163,7 +163,7 @@ export default function ShippingPulse() {
       <SectionCard
         number="08"
         title="Shipping Pulse"
-        quote="The physical half of the thesis — container freight, dry bulk, and retail flows. When the real economy shifts, it shows up here first."
+        quote="The physical half of the prediction — container shipping rates, dry-bulk shipping, and retail flow data. When the real economy shifts, these usually move first."
         verdict="early"
         accentColor={COLORS.blue}
       >

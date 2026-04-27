@@ -26,7 +26,7 @@ async function postResend(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: `2028 Crisis Agent <${from}>`,
+        from: `2028 Tracker <${from}>`,
         to: [to],
         subject,
         text: textBody,
@@ -106,12 +106,12 @@ export interface KillAlertInput {
 export async function sendKillAlert(
   k: KillAlertInput,
 ): Promise<{ ok: boolean; error?: string }> {
-  const subject = `🛑 [2028 AGENT] HALT — ${k.reason.split(':')[0] || 'kill switch'}`;
+  const subject = `🛑 [2028 Tracker] Stopped trading — ${k.reason.split(':')[0] || 'safety check tripped'}`;
   const body =
-    `*Agent halted at ${new Date().toISOString()}*\n\n` +
+    `*The agent stopped placing new trades at ${new Date().toISOString()}*\n\n` +
     `Reason: ${k.reason}\n` +
     `Canceled ${k.canceledOrders} open order${k.canceledOrders === 1 ? '' : 's'}.\n\n` +
-    `Owner approval required to resume new entries.` +
+    `You need to approve before the agent will place new trades again. Existing positions are untouched — the agent only stopped opening *new* ones.` +
     dashboardLink();
   return fanout(subject, body);
 }
@@ -134,12 +134,29 @@ export interface ApprovalAlertInput {
 }
 
 const KIND_URGENCY: Record<ApprovalAlertInput['kind'], string> = {
-  phase_flip: '[PHASE FLIP]',
-  oversize_ticket: '[OVERSIZE]',
-  new_ticker: '[NEW TICKER]',
-  unwind_all: '[UNWIND]',
-  resume_after_halt: '[RESUME HALT]',
+  phase_flip: '[Phase change]',
+  oversize_ticket: '[Large trade]',
+  new_ticker: '[New ticker]',
+  unwind_all: '[Close everything]',
+  resume_after_halt: '[Restart trading]',
 };
+
+function kindHumanLabel(kind: ApprovalAlertInput['kind']): string {
+  switch (kind) {
+    case 'phase_flip':
+      return 'switching from the waiting phase to the action phase';
+    case 'oversize_ticket':
+      return 'placing a larger-than-usual trade';
+    case 'new_ticker':
+      return 'trading a ticker we have not used before';
+    case 'unwind_all':
+      return 'closing every position because the prediction looks wrong';
+    case 'resume_after_halt':
+      return 'restarting trading after the safety stop fired';
+    default:
+      return kind.replace(/_/g, ' ');
+  }
+}
 
 // ————— trade-placed alert —————
 
@@ -162,7 +179,18 @@ export interface TradeAlertInput {
 }
 
 const STANDING_GUARDS =
-  'Standing guards: kill-switch fires at ≥2 anti-thesis signals · daily loss stop −4% of equity';
+  'Safety stops in place: the agent stops trading if 2+ economic readings turn the opposite way from the prediction, or if the account loses 4% in a single day.';
+
+function tradeActionLabel(action: string, side: 'buy' | 'sell'): string {
+  switch (action) {
+    case 'open': return side === 'buy' ? 'Bought' : 'Opened short';
+    case 'add': return side === 'buy' ? 'Added more' : 'Added to short';
+    case 'trim': return 'Sold some';
+    case 'close': return 'Closed';
+    case 'roll': return 'Replaced';
+    default: return `${action} (${side})`;
+  }
+}
 
 export async function sendTradeAlert(
   t: TradeAlertInput,
@@ -170,51 +198,75 @@ export async function sendTradeAlert(
   const instrLabel =
     t.instrument === 'equity'
       ? ''
-      : ` ${t.instrument.replace('_', ' ').toUpperCase()}`;
+      : ` ${t.instrument.replace('_', ' ')}`;
   const ex = t.expiry ? ` ${t.expiry}` : '';
   const str = t.strike != null ? ` @${t.strike}` : '';
-  const actionLabel = `${t.action.toUpperCase()} · ${t.side.toUpperCase()}`;
+  const actionLabel = tradeActionLabel(t.action, t.side);
   const sizeLabel =
     t.instrument === 'equity'
-      ? `${t.qty} sh`
+      ? `${t.qty} share${t.qty === 1 ? '' : 's'}`
       : `${t.qty} contract${t.qty === 1 ? '' : 's'}`;
-  const notionalLabel =
-    t.notional_usd != null ? `~$${Math.round(t.notional_usd).toLocaleString('en-US')}` : 'market';
+  const dollarLabel =
+    t.notional_usd != null ? `about $${Math.round(t.notional_usd).toLocaleString('en-US')}` : 'market price';
 
-  const subject = `✅ [2028 AGENT] ${actionLabel} ${t.ticker}${instrLabel}${ex}${str} — ${sizeLabel} (${notionalLabel})`;
+  const subject = `✅ [2028 Tracker] ${actionLabel} ${t.ticker}${instrLabel}${ex}${str} — ${sizeLabel} (${dollarLabel})`;
 
   const idLine = t.alpaca_order_id ? `\nOrder ID: \`${t.alpaca_order_id}\`` : '';
-  const occ = t.option_symbol ? `\nOCC symbol: \`${t.option_symbol}\`` : '';
+  const occ = t.option_symbol ? `\nFull option symbol: \`${t.option_symbol}\`` : '';
 
   const body =
     `*${actionLabel} ${t.ticker}${instrLabel}${ex}${str}*\n` +
-    `Size: ${sizeLabel} · notional: ${notionalLabel}${occ}${idLine}\n\n` +
-    `*Why:* ${t.rationale}\n` +
-    `*Exit:* ${t.exit_condition}\n\n` +
+    `Size: ${sizeLabel} · estimated cost: ${dollarLabel}${occ}${idLine}\n\n` +
+    `*Why we did it:* ${t.rationale}\n` +
+    `*When we'll close it:* ${t.exit_condition}\n\n` +
     `_${STANDING_GUARDS}_` +
     dashboardLink();
 
   return fanout(subject, body);
 }
 
+function approvalActionLabel(action: string): string {
+  switch (action) {
+    case 'open': return 'BUY';
+    case 'add': return 'BUY MORE';
+    case 'trim': return 'SELL SOME';
+    case 'close': return 'SELL';
+    case 'roll': return 'REPLACE';
+    case 'hold': return 'HOLD';
+    case 'unwind_all': return 'CLOSE EVERYTHING';
+    default: return action.toUpperCase();
+  }
+}
+
+function approvalSizeLabel(size: string): string {
+  switch (size) {
+    case 'starter': return 'small starter position';
+    case 'half': return 'half position';
+    case 'full': return 'full position';
+    case 'trim_third': return 'sell 1/3';
+    case 'trim_half': return 'sell 1/2';
+    default: return size.replace(/_/g, ' ');
+  }
+}
+
 export async function sendApprovalAlert(
   a: ApprovalAlertInput,
 ): Promise<{ ok: boolean; error?: string }> {
   const kindLabel = KIND_URGENCY[a.kind] ?? `[${a.kind}]`;
-  const subject = `${kindLabel} [2028 AGENT] approval needed (${a.proposals.length} proposal${a.proposals.length === 1 ? '' : 's'})`;
+  const subject = `${kindLabel} [2028 Tracker] Need your okay on ${a.proposals.length} suggested move${a.proposals.length === 1 ? '' : 's'}`;
   const proposalLines = a.proposals
     .map((p, i) => {
       const instr = p.instrument === 'equity' ? '' : ` ${p.instrument.replace('_', ' ')}`;
       const ex = p.expiry ? ` ${p.expiry}` : '';
       const str = p.strike != null ? ` @${p.strike}` : '';
-      return `${i + 1}. *${p.action.toUpperCase()}* ${p.ticker}${instr}${ex}${str} (${p.size_hint})\n   ${p.rationale}`;
+      return `${i + 1}. *${approvalActionLabel(p.action)}* ${p.ticker}${instr}${ex}${str} (${approvalSizeLabel(p.size_hint)})\n   ${p.rationale}`;
     })
     .join('\n\n');
   const body =
-    `*The agent needs your approval on a ${a.kind.replace(/_/g, ' ')}.*\n\n` +
+    `*The agent wants your okay before ${kindHumanLabel(a.kind)}.*\n\n` +
     `${a.rationale}\n\n` +
-    (proposalLines ? `${a.proposals.length} proposal${a.proposals.length === 1 ? '' : 's'}:\n${proposalLines}\n\n` : '') +
-    `Expires in ${a.expiresIn}.` +
+    (proposalLines ? `${a.proposals.length} suggested move${a.proposals.length === 1 ? '' : 's'}:\n${proposalLines}\n\n` : '') +
+    `This request expires in ${a.expiresIn}.` +
     dashboardLink();
   return fanout(subject, body);
 }

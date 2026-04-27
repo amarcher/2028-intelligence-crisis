@@ -19,13 +19,31 @@ function timeAgo(iso: string): string {
 }
 
 function urgencyPill(u: AgentProposal['urgency']): { label: string; color: string } {
-  if (u === 'act_today') return { label: 'ACT TODAY', color: COLORS.accent };
+  if (u === 'act_today') return { label: 'DO TODAY', color: COLORS.accent };
   if (u === 'this_week') return { label: 'THIS WEEK', color: COLORS.warning };
-  return { label: 'WAITING', color: COLORS.textDim };
+  return { label: 'WAIT FOR SIGNAL', color: COLORS.textDim };
 }
 
 function actionPill(a: AgentProposal['action']): string {
-  return a.replace('_', ' ').toUpperCase();
+  switch (a) {
+    case 'open': return 'BUY';
+    case 'add': return 'BUY MORE';
+    case 'trim': return 'SELL SOME';
+    case 'close': return 'SELL';
+    case 'roll': return 'REPLACE';
+    case 'hold': return 'HOLD';
+    case 'unwind_all': return 'CLOSE EVERYTHING';
+  }
+}
+
+function sizeHintLabel(s: AgentProposal['size_hint']): string {
+  switch (s) {
+    case 'starter': return 'small starter position';
+    case 'half': return 'half position';
+    case 'full': return 'full position';
+    case 'trim_third': return 'sell 1/3';
+    case 'trim_half': return 'sell 1/2';
+  }
 }
 
 function ProposalRow({ p }: { p: AgentProposal }) {
@@ -58,7 +76,7 @@ function ProposalRow({ p }: { p: AgentProposal }) {
           {actionPill(p.action)}
         </span>
         <span className="text-[11px] font-mono" style={{ color: COLORS.textDim }}>
-          {p.size_hint.replace('_', ' ')}
+          {sizeHintLabel(p.size_hint)}
         </span>
       </div>
       <div className="min-w-0">
@@ -107,6 +125,12 @@ function ProposalRow({ p }: { p: AgentProposal }) {
   );
 }
 
+function tickTypeText(t: AgentDigest['tick_type']): string {
+  if (t === 'premarket') return 'MORNING';
+  if (t === 'close') return 'END OF DAY';
+  return 'WEEKLY';
+}
+
 function TickTypeBadge({ tickType }: { tickType: AgentDigest['tick_type'] }) {
   return (
     <span
@@ -117,7 +141,7 @@ function TickTypeBadge({ tickType }: { tickType: AgentDigest['tick_type'] }) {
         border: `1px solid ${COLORS.border}`,
       }}
     >
-      {tickType.toUpperCase()}
+      {tickTypeText(tickType)}
     </span>
   );
 }
@@ -134,9 +158,23 @@ function PhaseBadge({ phase }: { phase: AgentDigest['phase'] }) {
         border: `1px solid ${color}30`,
       }}
     >
-      {isFlipped ? 'PHASE 2' : 'PHASE 1'}
+      {isFlipped ? 'ACTION PHASE' : 'WAITING PHASE'}
     </span>
   );
+}
+
+const SIGNAL_SHORT_LABEL: Record<string, string> = {
+  jolts: 'job openings',
+  claims: 'unemployment',
+  saas: 'software growth',
+  sp500: 'stock market',
+  housing: 'home prices',
+};
+
+function scorecardStateLabel(state: string | undefined): string {
+  if (state === 'fired') return 'CROSSED';
+  if (state === 'reversed') return 'PULLED BACK';
+  return 'NOT YET';
 }
 
 function ScorecardGrid({ scorecard }: { scorecard: AgentDigest['scorecard'] }) {
@@ -148,7 +186,7 @@ function ScorecardGrid({ scorecard }: { scorecard: AgentDigest['scorecard'] }) {
         className="text-[10px] font-bold tracking-[0.15em] font-mono mb-2"
         style={{ color: COLORS.textDim }}
       >
-        WEEKLY SCORECARD
+        WEEKLY READING SUMMARY
       </div>
       <div className="grid grid-cols-5 gap-2">
         {order.map((key) => {
@@ -162,13 +200,13 @@ function ScorecardGrid({ scorecard }: { scorecard: AgentDigest['scorecard'] }) {
               style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
             >
               <div className="text-[9px] font-mono" style={{ color: COLORS.textDim }}>
-                {key}
+                {SIGNAL_SHORT_LABEL[key] ?? key}
               </div>
               <div
                 className="text-[11px] font-bold tracking-[0.08em] font-mono mt-1"
                 style={{ color }}
               >
-                {(state ?? 'pending').toUpperCase()}
+                {scorecardStateLabel(state)}
               </div>
             </div>
           );
@@ -193,7 +231,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
             border: `1px solid ${COLORS.accent}40`,
           }}
         >
-          🛑 KILL-SWITCH TRIGGERED — agent is recommending a full unwind
+          🛑 ABORT SIGNAL — the prediction looks wrong. The agent is suggesting we close every position.
         </div>
       )}
 
@@ -201,7 +239,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
         <TickTypeBadge tickType={digest.tick_type} />
         <PhaseBadge phase={digest.phase} />
         <span className="text-[12px] font-display font-extrabold" style={{ color: COLORS.textBright }}>
-          {digest.fired_count}/5 firing
+          {digest.fired_count}/5 readings have crossed
         </span>
         <span className="text-[11px] font-mono flex-1 text-right" style={{ color: COLORS.textDim }}>
           {timeAgo(digest.created_at)} · {new Date(digest.created_at).toLocaleString()}
@@ -217,7 +255,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
           className="text-[12px] italic leading-[1.5] pl-3 mb-3"
           style={{ color: COLORS.textDim, borderLeft: `2px solid ${COLORS.accent}40` }}
         >
-          Drift: {digest.drift_notes}
+          This week's economic update: {digest.drift_notes}
         </div>
       )}
 
@@ -227,7 +265,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
             className="text-[10px] font-bold tracking-[0.15em] font-mono mt-2"
             style={{ color: COLORS.textDim }}
           >
-            PROPOSALS ({digest.proposals.length})
+            SUGGESTED MOVES ({digest.proposals.length})
           </div>
           {digest.proposals.map((p, i) => (
             <ProposalRow key={`${digest.id}-${i}`} p={p} />
@@ -284,7 +322,7 @@ function HistoryRow({ d }: { d: AgentDigest }) {
             className="text-[9px] font-bold tracking-[0.08em] font-mono px-1.5 py-[2px] rounded"
             style={{ color: COLORS.accent, background: `${COLORS.accent}18`, border: `1px solid ${COLORS.accent}40` }}
           >
-            KILL
+            ABORT
           </span>
         )}
         <span className="text-[11px] truncate flex-1 min-w-0" style={{ color: COLORS.text }}>
@@ -341,25 +379,25 @@ function StatusStrip({
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
       <MiniStat
-        label="STATUS"
-        value={enabled ? 'ENABLED' : 'DISABLED'}
-        change={config?.killed_reason ? `killed: ${config.killed_reason.slice(0, 50)}` : config ? `${execMode} · ${paperLabel}` : 'no config'}
+        label="AGENT"
+        value={enabled ? 'RUNNING' : 'PAUSED'}
+        change={config?.killed_reason ? `stopped: ${config.killed_reason.slice(0, 50)}` : config ? `${execMode} · ${paperLabel}` : 'no config'}
         signal={enabledSignal}
       />
       <MiniStat
-        label="EXEC PHASE"
+        label="EXECUTION MODE"
         value={phaseValue.replace('_', ' ').toUpperCase()}
-        change={latest ? `digest ${latest.phase === 'inflection' ? 'Phase 2' : 'Phase 1'} · ${latest.fired_count}/5` : 'no digests yet'}
+        change={latest ? `latest digest: ${latest.phase === 'inflection' ? 'Action phase' : 'Waiting phase'} · ${latest.fired_count}/5 readings` : 'no digests yet'}
         signal={phaseValue === 'small_live' || phaseValue === 'scale' ? 'alarming' : 'neutral'}
       />
       <MiniStat
-        label="LAST TICK"
+        label="LAST CHECK"
         value={latest ? timeAgo(latest.created_at) : '—'}
-        change={latest ? `${latest.tick_type} · reasoner ${latest.reasoner_status ?? '—'}` : ''}
+        change={latest ? `${tickTypeText(latest.tick_type).toLowerCase()} · agent ${latest.reasoner_status ?? '—'}` : ''}
         signal={latest?.reasoner_status === 'ok' || latest?.reasoner_status === 'retried_ok' ? 'reassuring' : 'neutral'}
       />
       <MiniStat
-        label="DIGEST HISTORY"
+        label="HISTORY"
         value={`${digestCount}`}
         change={digestCount >= 15 ? 'showing 15 most recent' : 'all digests'}
         signal="neutral"
@@ -431,7 +469,7 @@ function AgentControls({ config, onUpdate }: { config: AgentConfig | null; onUpd
   const handleToggleEnabled = async () => {
     if (!supabase || !config) return;
     const willEnable = !config.enabled;
-    const verb = willEnable ? 'enable' : 'mute';
+    const verb = willEnable ? 'restart' : 'pause';
     if (!window.confirm(`${verb} the agent?`)) return;
     setUpdating(true);
     setUpdateError(null);
@@ -453,7 +491,7 @@ function AgentControls({ config, onUpdate }: { config: AgentConfig | null; onUpd
 
   const handleResetDeadman = async () => {
     if (!supabase || !config) return;
-    if (!window.confirm('Reset deadman counter?')) return;
+    if (!window.confirm("Clear the agent's error count and restart it?")) return;
     setUpdating(true);
     setUpdateError(null);
     const { error: err } = await supabase
@@ -572,7 +610,7 @@ function AgentControls({ config, onUpdate }: { config: AgentConfig | null; onUpd
               opacity: updating ? 0.5 : 1,
             }}
           >
-            {config?.enabled ? 'MUTE AGENT' : 'ENABLE AGENT'}
+            {config?.enabled ? 'PAUSE AGENT' : 'RESTART AGENT'}
           </button>
           {(config?.consecutive_failures ?? 0) > 0 || config?.killed_reason ? (
             <button
@@ -586,7 +624,7 @@ function AgentControls({ config, onUpdate }: { config: AgentConfig | null; onUpd
                 opacity: updating ? 0.5 : 1,
               }}
             >
-              RESET DEADMAN ({config?.consecutive_failures ?? 0})
+              CLEAR ERROR COUNT ({config?.consecutive_failures ?? 0})
             </button>
           ) : null}
         </>
@@ -625,17 +663,17 @@ function KillBanner({ config }: { config: AgentConfig }) {
           className="text-[10px] font-bold tracking-[0.15em] font-mono"
           style={{ color: COLORS.accent }}
         >
-          🛑 HALTED
+          🛑 AGENT STOPPED
         </span>
         <span className="text-[11px] font-mono" style={{ color: COLORS.textDim }}>
           {since}
         </span>
       </div>
       <div className="text-[13px] mt-1" style={{ color: COLORS.textBright }}>
-        {config.halt_reason ?? 'agent halted without reason'}
+        {config.halt_reason ?? 'agent stopped (no reason recorded)'}
       </div>
       <div className="text-[11px] mt-1 font-mono" style={{ color: COLORS.textDim }}>
-        Owner must resume via "Reset Deadman" or the resume approval below.
+        The owner has to restart it via the "Restart agent" button or by approving the request below.
       </div>
     </div>
   );
@@ -647,6 +685,14 @@ const APPROVAL_KIND_COLOR: Record<AgentApproval['kind'], string> = {
   new_ticker: COLORS.blue,
   unwind_all: COLORS.accent,
   resume_after_halt: COLORS.accent,
+};
+
+const APPROVAL_KIND_LABEL: Record<AgentApproval['kind'], string> = {
+  phase_flip: 'PHASE CHANGE',
+  oversize_ticket: 'LARGE TRADE',
+  new_ticker: 'NEW TICKER',
+  unwind_all: 'CLOSE EVERYTHING',
+  resume_after_halt: 'RESTART AGENT',
 };
 
 function ApprovalCard({
@@ -661,13 +707,13 @@ function ApprovalCard({
   const [updating, setUpdating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const color = APPROVAL_KIND_COLOR[approval.kind];
-  const kindLabel = approval.kind.replace(/_/g, ' ').toUpperCase();
+  const kindLabel = APPROVAL_KIND_LABEL[approval.kind] ?? approval.kind.replace(/_/g, ' ').toUpperCase();
   const isPending = approval.status === 'pending';
   const expired = isPending && new Date(approval.expires_at) < new Date();
 
   const act = async (status: 'approved' | 'rejected') => {
     if (!isOwner) return;
-    if (!window.confirm(`${status === 'approved' ? 'APPROVE' : 'REJECT'} this ${kindLabel}?`)) return;
+    if (!window.confirm(`${status === 'approved' ? 'Approve' : 'Reject'} this ${kindLabel.toLowerCase()}?`)) return;
     setUpdating(true);
     setErr(null);
     try {
@@ -713,7 +759,7 @@ function ApprovalCard({
             className="cursor-pointer text-[11px] font-mono"
             style={{ color: COLORS.textDim }}
           >
-            {approval.proposals.length} proposal{approval.proposals.length === 1 ? '' : 's'}
+            {approval.proposals.length} suggested move{approval.proposals.length === 1 ? '' : 's'}
           </summary>
           <div className="flex flex-col gap-1.5 mt-2">
             {approval.proposals.map((p, i) => (
@@ -722,11 +768,11 @@ function ApprovalCard({
                 className="text-[11px] font-mono leading-[1.45] rounded p-2"
                 style={{ background: COLORS.bgCard, border: `1px solid ${COLORS.border}` }}
               >
-                <span style={{ color: COLORS.textBright }}>{p.action.toUpperCase()}</span>{' '}
+                <span style={{ color: COLORS.textBright }}>{actionPill(p.action)}</span>{' '}
                 <span style={{ color: COLORS.textBright, fontWeight: 700 }}>{p.ticker}</span>{' '}
                 <span style={{ color: COLORS.textDim }}>
                   {p.instrument !== 'equity' ? `${p.instrument.replace('_', ' ')} ` : ''}
-                  {p.expiry ?? ''} {p.strike != null ? `@${p.strike}` : ''} · {p.size_hint}
+                  {p.expiry ?? ''} {p.strike != null ? `@${p.strike}` : ''} · {sizeHintLabel(p.size_hint)}
                 </span>
                 <div style={{ color: COLORS.text }} className="mt-1">
                   {p.rationale}
@@ -762,7 +808,7 @@ function ApprovalCard({
               opacity: updating ? 0.5 : 1,
             }}
           >
-            REJECT
+            DECLINE
           </button>
         </div>
       )}
@@ -793,7 +839,7 @@ function OrdersList({ orders }: { orders: AgentOrder[] }) {
         className="text-[10px] font-bold tracking-[0.15em] font-mono mb-2"
         style={{ color: COLORS.textDim }}
       >
-        RECENT ORDERS · {orders.length}
+        RECENT TRADES · {orders.length}
       </div>
       <div className="flex flex-col gap-1">
         {orders.map((o) => {
@@ -854,8 +900,8 @@ export default function AgentDigestSection() {
     <div id="section-agent">
       <SectionCard
         number="07"
-        title="Agent Digest"
-        quote="The agent reads signals, writes proposals. You execute. Here is what it saw last and what it wants you to do."
+        title="What the agent thinks we should do"
+        quote="The agent reads the economic data and suggests trades. You decide whether to act. Here's the latest read and what it's recommending."
         verdict={verdict}
         accentColor={COLORS.accent}
       >
@@ -888,7 +934,7 @@ export default function AgentDigestSection() {
             className="text-[12px] p-4 rounded-md text-center"
             style={{ color: COLORS.textDim, background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
           >
-            No digests yet. Wait for the next scheduled tick (premarket 13:15 UTC, close 19:45 UTC Mon–Fri, weekly Mon 12:00 UTC).
+            No digests yet. The agent runs three times: morning (13:15 UTC, Mon–Fri), end of day (19:45 UTC, Mon–Fri), and weekly (Mondays at 12:00 UTC).
           </div>
         ) : (
           <LatestDigest digest={latest} />
@@ -900,7 +946,7 @@ export default function AgentDigestSection() {
               className="text-[10px] font-bold tracking-[0.15em] font-mono mb-2"
               style={{ color: COLORS.textDim }}
             >
-              HISTORY · {digests.length - 1} prior {digests.length - 1 === 1 ? 'digest' : 'digests'}
+              EARLIER UPDATES · {digests.length - 1} {digests.length - 1 === 1 ? 'check' : 'checks'}
             </div>
             <div className="flex flex-col gap-1.5">
               {digests.slice(1).map((d) => (
@@ -956,10 +1002,10 @@ function ApprovalsBlock({
         className="text-[10px] font-bold tracking-[0.15em] font-mono mb-2 flex items-center gap-2"
         style={{ color: COLORS.warning }}
       >
-        PENDING APPROVALS · {approvals.length}
+        WAITING ON YOUR OKAY · {approvals.length}
         {!isOwner && (
           <span style={{ color: COLORS.textDim }} className="tracking-normal">
-            (sign in as owner to act)
+            (sign in as owner to approve or decline)
           </span>
         )}
       </div>

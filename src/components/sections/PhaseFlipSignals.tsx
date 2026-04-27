@@ -31,8 +31,8 @@ export default function PhaseFlipSignals() {
     <div id="section-phase-flip">
       <SectionCard
         number="06"
-        title="Phase-Flip Signals"
-        quote="Thesis right, timetable wrong. Don't short into a bubble leg — let the dashboard tell you when to flip."
+        title="The five economic readings we're watching"
+        quote="The prediction is right about what will happen — just not yet about when. Wait for the readings to confirm before betting on a downturn."
         verdict={verdict}
         accentColor={COLORS.accent}
       >
@@ -53,8 +53,8 @@ export default function PhaseFlipSignals() {
             </span>
             <span className="text-[11px] mt-0.5" style={{ color: COLORS.textDim }}>
               {phaseFlipped
-                ? 'Two or more triggers have fired — pivot the book toward the short thesis.'
-                : 'Waiting for ≥ 2 triggers to fire before flipping to the short book.'}
+                ? "Two or more readings have crossed the danger line — time to switch from the defensive setup to bets on a market drop."
+                : "Holding defensive positions. We wait until at least 2 of the 5 readings cross before betting heavily on a downturn."}
             </span>
           </div>
           <div className="flex items-baseline gap-1 font-display" style={{ color: phaseColor }}>
@@ -68,7 +68,7 @@ export default function PhaseFlipSignals() {
           {signals.map((s) => {
             const fired = s.state === 'fired';
             const stateColor = fired ? COLORS.accent : COLORS.textDim;
-            const stateLabel = fired ? VERDICT.confirmed.icon + ' FIRED' : VERDICT.early.icon + ' NOT YET';
+            const stateLabel = fired ? VERDICT.confirmed.icon + ' CROSSED' : VERDICT.early.icon + ' NOT YET';
             return (
               <div
                 key={s.key}
@@ -103,7 +103,7 @@ export default function PhaseFlipSignals() {
                   {s.reading}
                 </div>
                 <div className="text-[10px] mt-0.5 font-mono" style={{ color: COLORS.textDim }}>
-                  trigger: {s.threshold}
+                  danger line: {s.threshold}
                 </div>
                 <div className="text-[11px] mt-1.5 leading-[1.45]" style={{ color: COLORS.text }}>
                   {s.note}
@@ -113,9 +113,9 @@ export default function PhaseFlipSignals() {
           })}
         </div>
 
-        {/* Playbook */}
+        {/* Plan */}
         <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
-          <strong style={{ color: phaseColor }}>Playbook:</strong> {playbook}
+          <strong style={{ color: phaseColor }}>What we're doing:</strong> {playbook}
         </div>
       </SectionCard>
     </div>

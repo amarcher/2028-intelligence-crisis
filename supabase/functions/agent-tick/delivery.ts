@@ -32,51 +32,82 @@ export interface DeliveryResult {
 // ——— subject / headline ———
 
 function phaseLabel(phase: DigestPayload['phase']): string {
-  return phase === 'inflection' ? 'Phase 2 · INFLECTION' : 'Phase 1';
+  return phase === 'inflection' ? 'Phase 2 · Action phase' : 'Phase 1 · Waiting phase';
+}
+
+function tickTypeLabel(t: DigestPayload['tick_type']): string {
+  return t === 'premarket' ? 'morning check' : t === 'close' ? 'end-of-day check' : 'weekly review';
 }
 
 function subject(d: DigestPayload): string {
   if (d.kill_switch_triggered) {
-    return `[2028 Crisis · KILL-SWITCH] unwind proposal`;
+    return `[2028 Tracker] Abort signal — recommend closing all positions`;
   }
   if (d.reasoner_status.startsWith('fallback')) {
-    return `[2028 Crisis · ${d.tick_type}] reasoner unavailable`;
+    return `[2028 Tracker · ${tickTypeLabel(d.tick_type)}] reasoner unavailable`;
   }
-  const phaseLabel = d.phase === 'inflection' ? 'INFLECTION' : 'grind';
+  const phaseShort = d.phase === 'inflection' ? 'Action phase' : 'Waiting phase';
   // Headline is the first sentence of the narrative, capped.
   const firstSentence = d.narrative.split(/(?<=[.!?])\s/)[0].slice(0, 90);
-  return `[2028 · ${phaseLabel} · ${d.fired_count}/5 · ${d.tick_type}] ${firstSentence}`;
+  return `[2028 Tracker · ${phaseShort} · ${d.fired_count}/5 readings crossed · ${tickTypeLabel(d.tick_type)}] ${firstSentence}`;
 }
 
 // ——— markdown body (shared between email + Slack mrkdwn) ———
 
+function actionLabel(action: string): string {
+  switch (action) {
+    case 'open': return 'BUY';
+    case 'add': return 'BUY MORE';
+    case 'trim': return 'SELL SOME';
+    case 'close': return 'SELL';
+    case 'roll': return 'REPLACE';
+    case 'hold': return 'HOLD';
+    case 'unwind_all': return 'CLOSE EVERYTHING';
+    default: return action.toUpperCase();
+  }
+}
+
+function sizeLabel(size: string): string {
+  switch (size) {
+    case 'starter': return 'small starter position';
+    case 'half': return 'half position';
+    case 'full': return 'full position';
+    case 'trim_third': return 'sell 1/3';
+    case 'trim_half': return 'sell 1/2';
+    default: return size.replace(/_/g, ' ');
+  }
+}
+
+function urgencyLabel(u: string): string {
+  switch (u) {
+    case 'act_today': return '🔥 do this today';
+    case 'this_week': return '↗ this week';
+    case 'waiting_for_trigger': return '○ waiting for a signal to cross';
+    default: return u.replace(/_/g, ' ');
+  }
+}
+
 function formatProposal(p: Proposal, i: number): string {
-  const urgencyLabel =
-    p.urgency === 'act_today'
-      ? '🔥 act today'
-      : p.urgency === 'this_week'
-        ? '↗ this week'
-        : '○ waiting';
   const instr = p.instrument === 'equity' ? '' : ` ${p.instrument.replace('_', ' ')}`;
   const expiry = p.expiry ? ` ${p.expiry}` : '';
   const strike = p.strike != null ? ` @${p.strike}` : '';
-  return `${i + 1}. *${p.action.toUpperCase()}* ${p.ticker}${instr}${expiry}${strike} — _${p.size_hint}_ · ${urgencyLabel}\n   ${p.rationale}`;
+  return `${i + 1}. *${actionLabel(p.action)}* ${p.ticker}${instr}${expiry}${strike} — _${sizeLabel(p.size_hint)}_ · ${urgencyLabel(p.urgency)}\n   ${p.rationale}`;
 }
 
 function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
   const header = d.kill_switch_triggered
-    ? `🛑 *KILL-SWITCH TRIGGERED* — anti-thesis signals firing. Consider unwinding.`
-    : `*${phaseLabel(d.phase)}* · ${d.fired_count}/5 signals firing · _${d.tick_type}_`;
+    ? `🛑 *Abort signal* — the economy is moving the opposite way from what we expected. The agent recommends closing every position.`
+    : `*${phaseLabel(d.phase)}* · ${d.fired_count} of 5 economic readings have crossed the danger line · _${tickTypeLabel(d.tick_type)}_`;
 
-  const drift = d.drift_notes ? `\n\n*Drift:* ${d.drift_notes}` : '';
+  const drift = d.drift_notes ? `\n\n*This week's economic update:* ${d.drift_notes}` : '';
 
   const proposals =
     d.proposals.length > 0
-      ? `\n\n*Proposals:*\n${d.proposals.map(formatProposal).join('\n\n')}`
+      ? `\n\n*Suggested moves:*\n${d.proposals.map(formatProposal).join('\n\n')}`
       : '';
 
   const footer = dashboardUrl
-    ? `\n\n—\n<${dashboardUrl}|Open dashboard>`
+    ? `\n\n—\n<${dashboardUrl}|Open the dashboard>`
     : '';
 
   return `${header}\n\n${d.narrative}${drift}${proposals}${footer}`;
@@ -114,7 +145,7 @@ async function sendEmail(d: DigestPayload, dashboardUrl: string | null): Promise
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: `2028 Crisis Agent <${from}>`,
+        from: `2028 Tracker <${from}>`,
         to: [to],
         subject: subject(d),
         html: mdToHtml(body),

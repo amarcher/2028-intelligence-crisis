@@ -144,37 +144,37 @@ export function evalHousing(data: DataPoint[]) {
 
 const SIGNAL_META: Record<SignalKey, { label: string; threshold: string; note: string }> = {
   jolts: {
-    label: 'JOLTS BREAKDOWN',
-    threshold: '< 6.00M for 2 prints',
-    note: 'Labor demand collapse — leading indicator for white-collar cuts',
+    label: 'JOB OPENINGS DROP',
+    threshold: 'below 6.00M two months in a row',
+    note: 'Companies posting fewer jobs — usually shows up before layoffs do',
   },
   claims: {
-    label: 'CLAIMS SPIKE',
-    threshold: '4-wk avg > 300K',
-    note: 'First hard evidence of white-collar layoff wave',
+    label: 'UNEMPLOYMENT FILINGS RISE',
+    threshold: '4-week average above 300K',
+    note: 'First hard proof that the layoff wave is here',
   },
   saas: {
-    label: 'SaaS GUIDE-DOWN',
-    threshold: 'NOW & WDAY both < 14%',
-    note: 'Systems-of-record slip confirms build-vs-buy shift',
+    label: 'SOFTWARE GROWTH SLOWDOWN',
+    threshold: 'ServiceNow & Workday both below 14% growth',
+    note: 'When the biggest enterprise software companies slow, it shows AI is replacing software spend',
   },
   sp500: {
-    label: 'S&P PEAK STALL',
-    threshold: 'peak ≥ 7,500 + 2mo below',
-    note: 'Bubble-leg topping — time to flip to short book',
+    label: 'STOCK MARKET STALLS NEAR PEAK',
+    threshold: 'S&P 500 hit 7,500+ then no new high for 2 months',
+    note: "The bull run is running out of steam — time to start positioning for a downturn",
   },
   housing: {
-    label: 'HOUSING ROLL',
-    threshold: 'Case-Shiller YoY < 0%',
-    note: 'Tech-hub housing contagion feeds bank & CRE tail',
+    label: 'HOME PRICES FALLING',
+    threshold: 'Case-Shiller national down year-over-year',
+    note: 'Falling home prices ripple into banks and commercial real estate',
   },
 };
 
 const PLAYBOOK_PHASE1 =
-  'Hold the setup: keep cheap long-dated SaaS LEAPS puts (NOW/CRM/HUBS/WDAY/DDOG, Jan-27/28), carry TLT + GLD + XLP as counterfactual hedges, ride small QQQ/SMH longs for the bubble leg, and wait for ≥2 signals before deploying the short book.';
+  "Stay defensive while we wait. Hold long-dated put options on the big software companies (NOW, CRM, HUBS, WDAY, DDOG, expiring Jan 2027 / Jan 2028) — these pay off if those stocks fall. Hold safe-haven positions in bonds (TLT), gold (GLD), and consumer staples (XLP). Keep small AI-stock holdings (QQQ, SMH) so we don't miss the last leg up. Don't make aggressive bets against the market until at least 2 of the 5 economic readings cross their danger lines.";
 
 const PLAYBOOK_PHASE2 =
-  'Flip the book: close AI-euphoria longs, roll SaaS LEAPS to 3–6mo near-dated puts, add SPY/QQQ put spreads, layer credit shorts (HYG, KRE). Keep 15–20% dry powder for bear rallies.';
+  "Switch to action mode. Sell the AI-stock holdings. Replace the long-dated software put options with shorter, more aggressive ones (3–6 months out). Add bear bets on the broader market (SPY, QQQ put spreads), and on commercial real estate and junk bonds (HYG, KRE). Keep 15–20% in cash so we can take advantage of bear-market rallies.";
 
 export function computeSignals(input: SignalsInput): SignalsResult {
   const evaluated: Record<SignalKey, { fired: boolean; reading: string }> = {
@@ -198,7 +198,7 @@ export function computeSignals(input: SignalsInput): SignalsResult {
   const firedCount = signals.filter((s) => s.state === 'fired').length;
   const flipped = firedCount >= 2;
   const phase: Phase = flipped ? 'inflection' : 'counterfactual_grind';
-  const phaseLabel = flipped ? 'PHASE 2 · INFLECTION' : 'PHASE 1 · COUNTERFACTUAL GRIND';
+  const phaseLabel = flipped ? 'PHASE 2 · ACTION' : 'PHASE 1 · WAITING';
   const verdict: VerdictType =
     firedCount >= 4 ? 'confirmed' : firedCount >= 2 ? 'trending' : 'early';
   const playbook = flipped ? PLAYBOOK_PHASE2 : PLAYBOOK_PHASE1;
