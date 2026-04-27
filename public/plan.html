@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>2028 Tracker — Our Investment Plan</title>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reset.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css" />
+
+  <style>
+    :root {
+      --bg:        #0a0a0f;
+      --bg-card:   #111118;
+      --border:    #1e1e2a;
+      --text:      #c8c8d4;
+      --text-dim:  #6b6b80;
+      --text-bright: #eeeef4;
+      --accent:    #ff4d3a;
+      --warning:   #f0a030;
+      --positive:  #30d490;
+      --blue:      #4d8eff;
+      --teal:      #2dd4bf;
+    }
+
+    html, body { background: var(--bg); }
+    body { color: var(--text); font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+
+    .reveal { color: var(--text); }
+    .reveal .slides { text-align: left; }
+    .reveal section { font-weight: 400; }
+
+    .reveal h1, .reveal h2, .reveal h3, .reveal h4 {
+      color: var(--text-bright);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      text-transform: none;
+      line-height: 1.15;
+      margin-top: 0;
+    }
+    .reveal h1 { font-size: 2.4em; }
+    .reveal h2 { font-size: 1.6em; margin-bottom: 0.6em; }
+    .reveal h3 { font-size: 1.1em; margin-bottom: 0.4em; }
+
+    .reveal p { line-height: 1.55; margin: 0 0 0.8em; }
+    .reveal ul, .reveal ol { line-height: 1.55; }
+    .reveal li { margin: 0.35em 0; }
+
+    .eyebrow {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.55em;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 1em;
+    }
+    .eyebrow.warning  { color: var(--warning); }
+    .eyebrow.accent   { color: var(--accent); }
+    .eyebrow.positive { color: var(--positive); }
+    .eyebrow.blue     { color: var(--blue); }
+
+    .mono {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .pill {
+      display: inline-block;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.5em;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      padding: 0.3em 0.7em;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      color: var(--accent);
+      background: rgba(255,77,58,0.1);
+      vertical-align: middle;
+    }
+    .pill.warning  { color: var(--warning); background: rgba(240,160,48,0.1); }
+    .pill.positive { color: var(--positive); background: rgba(48,212,144,0.1); }
+    .pill.blue     { color: var(--blue);     background: rgba(77,142,255,0.1); }
+    .pill.dim      { color: var(--text-dim); background: rgba(107,107,128,0.08); }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1em 1.1em;
+    }
+    .card.accent  { border-color: rgba(255,77,58,0.4); }
+    .card.warning { border-color: rgba(240,160,48,0.4); }
+    .card.positive{ border-color: rgba(48,212,144,0.4); }
+    .card.blue    { border-color: rgba(77,142,255,0.4); }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9em; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.9em; }
+    .grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6em; }
+
+    .ticker {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-weight: 700;
+      color: var(--text-bright);
+      background: rgba(77,142,255,0.12);
+      border: 1px solid rgba(77,142,255,0.3);
+      padding: 0.1em 0.4em;
+      border-radius: 4px;
+      font-size: 0.85em;
+      white-space: nowrap;
+    }
+
+    .label {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.7em;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 0.4em;
+    }
+
+    .big-num {
+      font-size: 1.6em;
+      font-weight: 800;
+      color: var(--text-bright);
+      line-height: 1;
+    }
+
+    .reveal .quote {
+      font-size: 0.95em;
+      color: var(--text-dim);
+      border-left: 2px solid var(--accent);
+      padding-left: 1em;
+      margin: 1.2em 0;
+      line-height: 1.55;
+    }
+
+    .footer-note {
+      position: absolute;
+      bottom: 1.2em;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.55em;
+      letter-spacing: 0.15em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+
+    .reveal .controls { color: var(--text-dim); }
+    .reveal .progress { color: var(--accent); }
+
+    .arrow {
+      color: var(--accent);
+      font-weight: 700;
+      padding: 0 0.3em;
+    }
+
+    .strike { text-decoration: line-through; color: var(--text-dim); }
+
+    .signal-row {
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      gap: 0.8em;
+      align-items: baseline;
+      padding: 0.5em 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .signal-row:last-child { border-bottom: none; }
+    .signal-num {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      color: var(--text-dim);
+      font-size: 0.8em;
+    }
+    .signal-name { color: var(--text-bright); font-weight: 600; font-size: 0.95em; }
+    .signal-line { font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--warning); font-size: 0.75em; }
+
+    .layer-bar {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      border-radius: 2px;
+    }
+    .layer-bar.accent  { background: var(--accent); }
+    .layer-bar.warning { background: var(--warning); }
+    .layer-bar.blue    { background: var(--blue); }
+    .layer-bar.positive{ background: var(--positive); }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+
+      <!-- 1. Title -->
+      <section>
+        <div class="eyebrow accent">2028 TRACKER · INVESTMENT PLAN</div>
+        <h1>Our investment plan,<br>in plain English.</h1>
+        <p style="color: var(--text-dim); font-size: 0.85em; max-width: 700px;">
+          What we own today, why we own it, what we'll buy when the data confirms our prediction,
+          and the exact rules for selling — all without trader jargon.
+        </p>
+        <div class="footer-note">use → ↓ to navigate · esc for overview</div>
+      </section>
+
+      <!-- 2. What we believe -->
+      <section>
+        <div class="eyebrow blue">THE PREDICTION</div>
+        <h2>What we think will happen</h2>
+        <p>
+          Citrini Research published a prediction in February 2026: a chain reaction kicks off
+          when AI starts eating into corporate-software revenue.
+        </p>
+        <div class="grid-3" style="margin-top: 1.2em;">
+          <div class="card blue">
+            <div class="label">STEP 1</div>
+            <div style="color: var(--text-bright); font-weight: 600; margin-bottom: 0.3em;">AI replaces software spend</div>
+            <div style="font-size: 0.8em; color: var(--text);">Companies cancel SaaS subscriptions in favor of cheaper AI tools.</div>
+          </div>
+          <div class="card warning">
+            <div class="label">STEP 2</div>
+            <div style="color: var(--text-bright); font-weight: 600; margin-bottom: 0.3em;">White-collar layoffs</div>
+            <div style="font-size: 0.8em; color: var(--text);">Software companies and corporate buyers cut headcount as growth slows.</div>
+          </div>
+          <div class="card accent">
+            <div class="label">STEP 3</div>
+            <div style="color: var(--text-bright); font-weight: 600; margin-bottom: 0.3em;">Crash</div>
+            <div style="font-size: 0.8em; color: var(--text);">Consumer spending collapses, financial system strains, S&amp;P 500 falls ~56%.</div>
+          </div>
+        </div>
+        <div class="quote" style="margin-top: 1.4em;">
+          We believe the prediction is <strong style="color: var(--text-bright);">directionally right</strong>
+          (this <em>will</em> happen) but the <strong style="color: var(--text-bright);">timing is delayed</strong> 6&ndash;18 months.
+          So our job is to be positioned for it without bleeding to death waiting.
+        </div>
+      </section>
+
+      <!-- 3. Two phases overview -->
+      <section>
+        <div class="eyebrow warning">THE STRATEGY · TWO PHASES</div>
+        <h2>We have two modes. Right now we're in Phase 1.</h2>
+        <div class="grid-2" style="margin-top: 1em;">
+          <div class="card warning" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar warning"></div>
+            <span class="pill warning">PHASE 1 · WAITING — WHERE WE ARE</span>
+            <h3 style="margin-top: 0.6em; color: var(--warning);">Stay defensive while we wait</h3>
+            <p style="font-size: 0.85em;">
+              Hold a small, balanced portfolio. The biggest piece pays off if the prediction
+              comes true. The rest is insurance.
+            </p>
+            <p style="font-size: 0.78em; color: var(--text-dim);">
+              <strong style="color: var(--text);">Don't bet aggressively against the market</strong> until at least 2 of 5 economic readings cross.
+            </p>
+          </div>
+          <div class="card accent" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar accent"></div>
+            <span class="pill">PHASE 2 · ACTION — WHEN 2 SIGNALS CROSS</span>
+            <h3 style="margin-top: 0.6em; color: var(--accent);">Switch to bear bets</h3>
+            <p style="font-size: 0.85em;">
+              Sell the AI-stock holdings. Replace defensive options with shorter, more aggressive
+              bear bets. Add positions on commercial real estate and junk bonds.
+            </p>
+            <p style="font-size: 0.78em; color: var(--text-dim);">
+              <strong style="color: var(--text);">Keep 15&ndash;20% cash</strong> for buying opportunities during bear-market rallies.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Five readings -->
+      <section>
+        <div class="eyebrow blue">THE TRIGGER</div>
+        <h2>Five economic readings tell us when to switch phases</h2>
+        <p style="color: var(--text-dim); font-size: 0.85em;">
+          When <strong style="color: var(--text-bright);">2 or more</strong> cross their danger line, we move from Phase 1 to Phase 2.
+        </p>
+        <div class="card" style="margin-top: 0.8em;">
+          <div class="signal-row">
+            <span class="signal-num">01</span>
+            <span class="signal-name">Job openings drop</span>
+            <span class="signal-line">below 6.0M for 2 months</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">02</span>
+            <span class="signal-name">Unemployment filings rise</span>
+            <span class="signal-line">4-week avg above 300K</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">03</span>
+            <span class="signal-name">Software growth slows</span>
+            <span class="signal-line">ServiceNow &amp; Workday both below 14%</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">04</span>
+            <span class="signal-name">Stock market stalls near peak</span>
+            <span class="signal-line">S&amp;P hit 7,500+ then no new high for 2 months</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">05</span>
+            <span class="signal-name">Home prices falling</span>
+            <span class="signal-line">Case-Shiller down year-over-year</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Phase 1 holdings overview -->
+      <section>
+        <div class="eyebrow warning">PHASE 1 · WHAT WE HOLD NOW</div>
+        <h2>Three layers that survive any outcome</h2>
+        <div class="grid-3" style="margin-top: 1em;">
+          <div class="card accent" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar accent"></div>
+            <div class="label">LAYER 1 · THE MAIN BET</div>
+            <h3 style="color: var(--accent); margin-bottom: 0.3em;">Software puts</h3>
+            <div style="font-size: 0.78em; color: var(--text-dim); margin-bottom: 0.6em;">~5% of portfolio</div>
+            <p style="font-size: 0.82em;">
+              Long-dated put options on the big enterprise-software companies.
+              <strong style="color: var(--text-bright);">Pays off if the prediction comes true.</strong>
+            </p>
+          </div>
+          <div class="card positive" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar positive"></div>
+            <div class="label">LAYER 2 · INSURANCE</div>
+            <h3 style="color: var(--positive); margin-bottom: 0.3em;">Safe havens</h3>
+            <div style="font-size: 0.78em; color: var(--text-dim); margin-bottom: 0.6em;">~15&ndash;25% of portfolio</div>
+            <p style="font-size: 0.82em;">
+              Bonds, gold, consumer staples. <strong style="color: var(--text-bright);">Holds value
+              if the prediction is wrong</strong> in a different way (inflation, geopolitics, etc.).
+            </p>
+          </div>
+          <div class="card blue" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar blue"></div>
+            <div class="label">LAYER 3 · &quot;RIGHT BUT LATE&quot;</div>
+            <h3 style="color: var(--blue); margin-bottom: 0.3em;">Small AI exposure</h3>
+            <div style="font-size: 0.78em; color: var(--text-dim); margin-bottom: 0.6em;">~5&ndash;10% of portfolio</div>
+            <p style="font-size: 0.82em;">
+              A small position in AI stocks. <strong style="color: var(--text-bright);">Profits
+              if the AI rally keeps going</strong> while we wait for the real downturn.
+            </p>
+          </div>
+        </div>
+        <p style="margin-top: 1.2em; font-size: 0.8em; color: var(--text-dim);">
+          The remaining ~60&ndash;70% sits in cash or broad index funds &mdash; we don't bet the whole
+          account on this prediction. The above is the part that's <em>positioned</em> for it.
+        </p>
+      </section>
+
+      <!-- 6. Layer 1 detail -->
+      <section>
+        <div class="eyebrow accent">LAYER 1 · THE MAIN BET</div>
+        <h2>Software puts &mdash; the big payoff position</h2>
+        <div class="grid-2" style="margin-top: 0.8em;">
+          <div>
+            <div class="label">WHAT WE HOLD</div>
+            <p style="font-size: 0.9em;">
+              Long-dated <strong>put options</strong> (contracts that pay off if a stock falls)
+              on these enterprise-software companies:
+            </p>
+            <p style="margin: 0.6em 0;">
+              <span class="ticker">NOW</span>
+              <span class="ticker">CRM</span>
+              <span class="ticker">HUBS</span>
+              <span class="ticker">WDAY</span>
+              <span class="ticker">DDOG</span>
+            </p>
+            <p style="font-size: 0.85em;">
+              Expiring <strong>January 2027</strong> and <strong>January 2028</strong>,
+              with strike prices <strong>20&ndash;30% below today's stock price</strong>.
+            </p>
+          </div>
+          <div>
+            <div class="label">HOW WE MANAGE THEM</div>
+            <ul style="font-size: 0.85em;">
+              <li>If a put has fewer than <strong>90 days</strong> until expiry, we replace it with the next January expiration (same size).</li>
+              <li>If a put doubles in value <span class="mono">(2&times; entry)</span>, we sell <strong>1/3</strong>.</li>
+              <li>If it quadruples <span class="mono">(4&times; entry)</span>, we sell another <strong>1/3</strong>.</li>
+              <li>The last <strong>1/3</strong> rides until either the prediction plays out or we hit an abort signal.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="quote" style="margin-top: 1.2em; font-size: 0.85em;">
+          <strong style="color: var(--text-bright);">Why long-dated:</strong> we don't know exactly <em>when</em>
+          the crash starts, so we buy contracts that won't expire before our prediction window closes.
+        </div>
+      </section>
+
+      <!-- 7. Layer 2 detail -->
+      <section>
+        <div class="eyebrow positive">LAYER 2 · INSURANCE</div>
+        <h2>Safe havens &mdash; what holds value if we're wrong</h2>
+        <div class="grid-3" style="margin-top: 0.9em;">
+          <div class="card positive">
+            <span class="ticker">TLT</span>
+            <h3 style="margin-top: 0.5em;">Long-term US bonds</h3>
+            <p style="font-size: 0.82em;">
+              Rises when investors flee to safety, or when interest rates fall (which usually
+              happens in a recession).
+            </p>
+          </div>
+          <div class="card positive">
+            <span class="ticker">GLD</span>
+            <h3 style="margin-top: 0.5em;">Gold</h3>
+            <p style="font-size: 0.82em;">
+              Holds value during inflation, currency stress, or financial-system shocks.
+              The classic crisis hedge.
+            </p>
+          </div>
+          <div class="card positive">
+            <span class="ticker">XLP</span>
+            <h3 style="margin-top: 0.5em;">Consumer staples</h3>
+            <p style="font-size: 0.82em;">
+              Procter &amp; Gamble, Coca-Cola, Walmart. People still buy soap and food in a downturn.
+              Falls less than the broader market.
+            </p>
+          </div>
+        </div>
+        <div class="quote" style="margin-top: 1.2em; font-size: 0.85em;">
+          <strong style="color: var(--text-bright);">Why these:</strong> the prediction could be
+          wrong about <em>what</em> breaks, not just <em>when</em>. If inflation comes back hard,
+          or geopolitics shocks the market, these hold up while the software puts decay.
+        </div>
+      </section>
+
+      <!-- 8. Layer 3 detail -->
+      <section>
+        <div class="eyebrow blue">LAYER 3 · &quot;RIGHT BUT LATE&quot;</div>
+        <h2>Small AI position &mdash; in case the rally keeps going</h2>
+        <div class="grid-2" style="margin-top: 0.9em;">
+          <div>
+            <div class="label">WHAT WE HOLD</div>
+            <p style="margin: 0.4em 0;">
+              <span class="ticker">QQQ</span> <span style="color: var(--text-dim); font-size: 0.85em;">Nasdaq-100 ETF</span>
+            </p>
+            <p style="margin: 0.4em 0;">
+              <span class="ticker">SMH</span> <span style="color: var(--text-dim); font-size: 0.85em;">semiconductor ETF</span>
+            </p>
+            <p style="margin: 0.4em 0;">
+              <span class="ticker">NVDA</span> <span style="color: var(--text-dim); font-size: 0.85em;">(small)</span>
+            </p>
+          </div>
+          <div>
+            <div class="label">WHY THIS EXISTS</div>
+            <p style="font-size: 0.88em;">
+              The whole strategy assumes the prediction is right but <strong>delayed 6&ndash;18 months</strong>.
+              If we're wrong about the timing and AI stocks keep rallying for another year,
+              this position lets us participate in the upside instead of bleeding option-premium for nothing.
+            </p>
+          </div>
+        </div>
+        <div class="card accent" style="margin-top: 1.2em; position: relative; padding-left: 1.4em;">
+          <div class="layer-bar accent"></div>
+          <div class="label">EXIT RULE</div>
+          <p style="font-size: 0.9em; margin: 0;">
+            <strong style="color: var(--accent);">Sell all of Layer 3 the moment 2 of 5 readings cross.</strong>
+            We don't wait, we don't hesitate. The whole point of this layer was to hedge against
+            the prediction being late &mdash; once the data confirms, that hedge is no longer needed.
+          </p>
+        </div>
+      </section>
+
+      <!-- 9. Phase 2 trigger -->
+      <section data-background-color="#1a0d0d">
+        <div class="eyebrow accent">THE FLIP</div>
+        <h2>When 2 of 5 readings cross&hellip;</h2>
+        <p style="font-size: 1em; max-width: 700px;">
+          We don't sell <em>everything</em> we own. We <strong style="color: var(--text-bright);">rotate</strong>
+          the portfolio: out of bull-market positions, into bear-market positions.
+        </p>
+        <div class="grid-2" style="margin-top: 1.4em;">
+          <div class="card" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar" style="background: var(--text-dim);"></div>
+            <div class="label">SELL</div>
+            <ul style="font-size: 0.85em; list-style: none; padding-left: 0;">
+              <li><span class="ticker">QQQ</span> <span class="ticker">SMH</span> <span class="ticker">NVDA</span> &mdash; the AI longs</li>
+              <li><span class="ticker">AVGO</span> &mdash; and any other AI-bubble names</li>
+              <li>Hyperscaler exposure (cloud-infra)</li>
+            </ul>
+          </div>
+          <div class="card accent" style="position: relative; padding-left: 1.4em;">
+            <div class="layer-bar accent"></div>
+            <div class="label">REPLACE WITH</div>
+            <ul style="font-size: 0.85em; list-style: none; padding-left: 0;">
+              <li>Shorter-dated, more aggressive software puts (3&ndash;6 months out)</li>
+              <li>Bear bets on the broader market</li>
+              <li>Bear bets on commercial real estate &amp; junk bonds</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- 10. Phase 2 detail - what we buy -->
+      <section>
+        <div class="eyebrow accent">PHASE 2 · WHAT WE BUY</div>
+        <h2>Action-phase positions</h2>
+        <div class="grid-2" style="gap: 1em;">
+          <div class="card accent">
+            <div class="label">REPLACE LAYER 1</div>
+            <h3 style="color: var(--accent);">Near-dated software puts</h3>
+            <p style="font-size: 0.85em;">
+              Sell the Jan-2027 / Jan-2028 puts (now profitable from the move). Buy
+              <strong>3&ndash;6 month puts</strong> on the same software names. They're cheaper
+              and pay off faster as the decline accelerates.
+            </p>
+          </div>
+          <div class="card accent">
+            <div class="label">NEW · BROAD MARKET BEARS</div>
+            <h3 style="color: var(--accent);">S&amp;P put spreads</h3>
+            <p style="font-size: 0.85em;">
+              <span class="ticker">SPY</span> <span class="ticker">QQQ</span>
+              put spreads &mdash; <strong>3&ndash;6 months out, 10&ndash;20% below today's price</strong>.
+              A spread limits cost; we know the maximum we can lose up front.
+            </p>
+          </div>
+          <div class="card warning">
+            <div class="label">NEW · CREDIT SHORTS</div>
+            <h3 style="color: var(--warning);">Junk bond puts</h3>
+            <p style="font-size: 0.85em;">
+              <span class="ticker">HYG</span> puts &mdash; high-yield corporate bonds (&quot;junk&quot;)
+              get hit hard when the economy weakens and companies start defaulting.
+            </p>
+          </div>
+          <div class="card warning">
+            <div class="label">NEW · REAL-ESTATE SHORTS</div>
+            <h3 style="color: var(--warning);">Regional banks &amp; commercial real estate</h3>
+            <p style="font-size: 0.85em;">
+              <span class="ticker">KRE</span> (regional banks),
+              <span class="ticker">IYR</span> <span class="ticker">VNQ</span> (real-estate ETFs),
+              <span class="ticker">BXP</span> <span class="ticker">SLG</span> (office REITs) puts.
+              Tech-hub housing spillover hits these first.
+            </p>
+          </div>
+        </div>
+        <p style="margin-top: 1em; font-size: 0.78em; color: var(--text-dim);">
+          We keep <strong style="color: var(--positive);">15&ndash;20% in cash</strong> so we can
+          buy on bear-market rallies (the market doesn't fall in a straight line &mdash; there will be
+          sharp bounces along the way).
+        </p>
+      </section>
+
+      <!-- 11. Phase 2 exit rules -->
+      <section>
+        <div class="eyebrow accent">PHASE 2 · EXIT RULES</div>
+        <h2>How and when we'll close out</h2>
+        <div class="grid-2" style="gap: 1em;">
+          <div class="card">
+            <div class="label">RULE OF THIRDS (UPSIDE)</div>
+            <p style="font-size: 0.85em;">
+              On any position that doubles or triples:
+            </p>
+            <ul style="font-size: 0.82em;">
+              <li>Sell <strong>1/3</strong> at <span class="mono">2&times; entry</span></li>
+              <li>Sell another <strong>1/3</strong> at <span class="mono">4&times; entry</span></li>
+              <li>Let the last <strong>1/3</strong> ride to thesis completion</li>
+            </ul>
+          </div>
+          <div class="card warning">
+            <div class="label">TIME-BASED ROLLS</div>
+            <p style="font-size: 0.85em;">
+              Any option with fewer than <strong>30 days</strong> until expiry that's still in profit
+              gets rolled forward (closed and replaced with a longer-dated version)
+              so we don't lose value to time decay near expiry.
+            </p>
+          </div>
+          <div class="card positive">
+            <div class="label">TARGET COMPLETION</div>
+            <p style="font-size: 0.85em;">
+              The original prediction calls for the S&amp;P to fall ~56% from its peak.
+              When we get within striking distance of that level, we close out and move to cash.
+              <strong style="color: var(--positive);">Don't be greedy &mdash; take the win.</strong>
+            </p>
+          </div>
+          <div class="card accent">
+            <div class="label">SIGNALS REVERSE</div>
+            <p style="font-size: 0.85em;">
+              If the 5 readings start moving back the other way (jobs recovering,
+              software growth re-accelerating), we close bear positions
+              progressively rather than holding into a recovery.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 12. Abort condition -->
+      <section data-background-color="#1f0a0a">
+        <div class="eyebrow accent">THE ABORT SIGNAL</div>
+        <h2>When we close everything</h2>
+        <p style="max-width: 700px;">
+          If the economy moves <strong style="color: var(--text-bright);">opposite to our prediction</strong>,
+          we don't keep doubling down. We close every position and walk away.
+        </p>
+        <p style="font-size: 0.85em; color: var(--text-dim); margin-top: 0.4em;">
+          <strong style="color: var(--text);">2 or more</strong> of these "abort triggers" active = close everything.
+        </p>
+        <div class="card accent" style="margin-top: 1em;">
+          <div class="signal-row">
+            <span class="signal-num">A1</span>
+            <span class="signal-name">Job openings re-accelerate</span>
+            <span class="signal-line">above 8.0M for 2 quarters</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">A2</span>
+            <span class="signal-name">Software growth re-accelerates</span>
+            <span class="signal-line">ServiceNow &gt; 18%, Workday &gt; 15%, both rising</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">A3</span>
+            <span class="signal-name">Unemployment stays low into 2027+</span>
+            <span class="signal-line">below 3.8%</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">A4</span>
+            <span class="signal-name">Money velocity climbs &amp; savings stay low</span>
+            <span class="signal-line">M2 velocity &gt; 1.45 + savings rate &lt; 5%</span>
+          </div>
+          <div class="signal-row">
+            <span class="signal-num">A5</span>
+            <span class="signal-name">S&amp;P 500 sustains above 8,500</span>
+            <span class="signal-line">multiple monthly closes</span>
+          </div>
+        </div>
+        <p style="margin-top: 1.2em; font-size: 0.85em; color: var(--text-dim);">
+          When the abort triggers, the agent emits a single <strong style="color: var(--accent);">CLOSE EVERYTHING</strong>
+          recommendation and stops suggesting new trades. The user manually closes positions.
+        </p>
+      </section>
+
+      <!-- 13. Safety stops -->
+      <section>
+        <div class="eyebrow warning">SAFETY STOPS</div>
+        <h2>Built-in guardrails</h2>
+        <p style="color: var(--text-dim); font-size: 0.85em; max-width: 700px;">
+          Even if the strategy is working, the agent has hard limits that pause new trades
+          to protect the account.
+        </p>
+        <div class="grid-2" style="margin-top: 1em;">
+          <div class="card warning">
+            <div class="label">DAILY LOSS STOP</div>
+            <h3 style="color: var(--warning);">&minus;4% in a single day</h3>
+            <p style="font-size: 0.85em;">
+              If the account loses more than 4% of its equity in one trading day, the agent
+              stops opening new positions. Existing positions are untouched. Owner approval
+              is required to resume.
+            </p>
+          </div>
+          <div class="card warning">
+            <div class="label">ABORT TRIGGER</div>
+            <h3 style="color: var(--warning);">2+ anti-prediction signals</h3>
+            <p style="font-size: 0.85em;">
+              When 2 or more abort triggers are active, the agent suggests closing every
+              position. The user always has the final say.
+            </p>
+          </div>
+        </div>
+        <div class="card" style="margin-top: 1em;">
+          <div class="label">APPROVAL REQUIRED FOR</div>
+          <ul style="font-size: 0.85em; columns: 2; column-gap: 2em;">
+            <li>Switching from Phase 1 to Phase 2</li>
+            <li>Any trade larger than the standard size</li>
+            <li>Buying a ticker we haven't traded before</li>
+            <li>Closing every position at once</li>
+            <li>Restarting after the safety stop fires</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- 14. Cheat sheet -->
+      <section>
+        <div class="eyebrow positive">ONE-PAGE SUMMARY</div>
+        <h2>The whole plan on one slide</h2>
+        <div class="grid-2" style="gap: 0.9em; margin-top: 0.8em;">
+          <div class="card warning" style="position: relative; padding-left: 1.2em;">
+            <div class="layer-bar warning"></div>
+            <span class="pill warning">PHASE 1 · NOW</span>
+            <h3 style="margin-top: 0.5em; font-size: 1em;">HOLD</h3>
+            <ul style="font-size: 0.78em; padding-left: 1.2em;">
+              <li>Long-dated software puts <span class="mono">(NOW, CRM, HUBS, WDAY, DDOG &middot; Jan 27/28 &middot; 20&ndash;30% below price)</span></li>
+              <li>Safe havens <span class="mono">(TLT, GLD, XLP)</span></li>
+              <li>Small AI exposure <span class="mono">(QQQ, SMH, NVDA)</span></li>
+            </ul>
+            <h3 style="margin-top: 0.7em; font-size: 1em;">RULES</h3>
+            <ul style="font-size: 0.78em; padding-left: 1.2em;">
+              <li>Roll any put with &lt;90 days left to next January</li>
+              <li>Sell 1/3 at 2&times;, 1/3 at 4&times;, ride the last 1/3</li>
+            </ul>
+          </div>
+          <div class="card accent" style="position: relative; padding-left: 1.2em;">
+            <div class="layer-bar accent"></div>
+            <span class="pill">PHASE 2 · WHEN 2 OF 5 CROSS</span>
+            <h3 style="margin-top: 0.5em; font-size: 1em;">SELL</h3>
+            <ul style="font-size: 0.78em; padding-left: 1.2em;">
+              <li>All AI longs <span class="mono">(QQQ, SMH, NVDA, AVGO)</span></li>
+            </ul>
+            <h3 style="margin-top: 0.6em; font-size: 1em;">BUY</h3>
+            <ul style="font-size: 0.78em; padding-left: 1.2em;">
+              <li>Near-dated software puts <span class="mono">(3&ndash;6 mo)</span></li>
+              <li>S&amp;P put spreads <span class="mono">(SPY, QQQ &middot; 10&ndash;20% below)</span></li>
+              <li>Junk bond &amp; CRE shorts <span class="mono">(HYG, KRE, IYR, BXP, SLG)</span></li>
+            </ul>
+            <h3 style="margin-top: 0.6em; font-size: 1em;">KEEP</h3>
+            <ul style="font-size: 0.78em; padding-left: 1.2em;">
+              <li>15&ndash;20% in cash for bear-market rallies</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card accent" style="margin-top: 0.8em; position: relative; padding-left: 1.2em;">
+          <div class="layer-bar accent"></div>
+          <span class="pill">ABORT &middot; 2+ ANTI-SIGNALS</span>
+          <span style="margin-left: 0.6em; font-size: 0.82em;">Close every position. Walk away. Don't double down.</span>
+        </div>
+      </section>
+
+      <!-- 15. End -->
+      <section>
+        <div class="eyebrow positive">THE PHILOSOPHY</div>
+        <h2>Be positioned, not committed.</h2>
+        <p style="max-width: 700px; font-size: 0.95em;">
+          We're not betting the whole account on one prediction. We're holding a small,
+          balanced portfolio that <strong style="color: var(--text-bright);">survives any of three outcomes</strong>:
+        </p>
+        <div style="margin-top: 1em; font-size: 0.92em;">
+          <p>
+            <span class="pill">RIGHT &amp; ON TIME</span>
+            &nbsp;&rarr;&nbsp; software puts pay off, we rotate to bigger bear bets
+          </p>
+          <p>
+            <span class="pill warning">RIGHT BUT LATE</span>
+            &nbsp;&rarr;&nbsp; AI longs cushion the wait, puts roll forward
+          </p>
+          <p>
+            <span class="pill positive">WRONG IN A DIFFERENT WAY</span>
+            &nbsp;&rarr;&nbsp; bonds, gold, staples hold the line; we abort cleanly
+          </p>
+        </div>
+        <div class="quote" style="margin-top: 1.4em; font-size: 0.95em;">
+          <strong style="color: var(--text-bright);">The agent reads the data three times a day,
+          sends a digest, and recommends moves.</strong>
+          You always have the final say. The job of this plan is to make those recommendations
+          easy to act on &mdash; not to make decisions for you.
+        </div>
+        <div class="footer-note">end &middot; press esc for overview</div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      controls: true,
+      progress: true,
+      center: false,
+      transition: 'fade',
+      backgroundTransition: 'fade',
+      width: 1200,
+      height: 760,
+      margin: 0.06,
+    });
+  </script>
+</body>
+</html>
