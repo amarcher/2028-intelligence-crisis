@@ -11,23 +11,36 @@
   <style>
     :root {
       --bg:        #0a0a0f;
-      --bg-card:   #111118;
-      --border:    #1e1e2a;
-      --text:      #c8c8d4;
-      --text-dim:  #6b6b80;
-      --text-bright: #eeeef4;
-      --accent:    #ff4d3a;
-      --warning:   #f0a030;
-      --positive:  #30d490;
-      --blue:      #4d8eff;
+      --bg-card:   #15151d;
+      --border:    #2a2a3a;
+      --text:      #d8d8e2;
+      --text-dim:  #8a8aa0;
+      --text-bright: #ffffff;
+      --accent:    #ff5c4a;
+      --warning:   #f5b040;
+      --positive:  #3edc9c;
+      --blue:      #5b9aff;
       --teal:      #2dd4bf;
+
+      /* Reveal.js v5 theme variables — these override the default white theme */
+      --r-background-color: #0a0a0f;
+      --r-main-color: #d8d8e2;
+      --r-heading-color: #ffffff;
+      --r-link-color: #5b9aff;
+      --r-link-color-hover: #5b9aff;
+      --r-selection-background-color: rgba(255,92,74,0.4);
+      --r-selection-color: #ffffff;
+      --r-main-font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --r-heading-font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --r-code-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
     }
 
-    html, body { background: var(--bg); }
+    html, body, .reveal-viewport { background: var(--bg) !important; }
     body { color: var(--text); font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
 
-    .reveal { color: var(--text); }
+    .reveal { color: var(--text); background: var(--bg); }
     .reveal .slides { text-align: left; }
+    .reveal .slides section { color: var(--text); }
     .reveal section { font-weight: 400; }
 
     .reveal h1, .reveal h2, .reveal h3, .reveal h4 {
