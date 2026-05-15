@@ -63,6 +63,7 @@ export interface GuardrailContext {
     halted: boolean;
     halt_reason: string | null;
     phase: 'shadow' | 'paper' | 'small_live' | 'scale';
+    paper_mode: boolean;
   };
   account: AlpacaAccount;
   positions: AlpacaPosition[];

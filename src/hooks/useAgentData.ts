@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import type { AgentApproval, AgentConfig, AgentDigest, AgentOrder } from '../lib/types';
+import type { AgentApproval, AgentConfig, AgentDigest, AgentOrder, AgentSnapshot } from '../lib/types';
 
 interface UseAgentDataResult {
   digests: AgentDigest[];
+  latestSnapshot: AgentSnapshot | null;
   config: AgentConfig | null;
   approvals: AgentApproval[];
   orders: AgentOrder[];
@@ -18,6 +19,7 @@ const APPROVAL_LIMIT = 10;
 
 export function useAgentData(): UseAgentDataResult {
   const [digests, setDigests] = useState<AgentDigest[]>([]);
+  const [latestSnapshot, setLatestSnapshot] = useState<AgentSnapshot | null>(null);
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [approvals, setApprovals] = useState<AgentApproval[]>([]);
   const [orders, setOrders] = useState<AgentOrder[]>([]);
@@ -34,12 +36,18 @@ export function useAgentData(): UseAgentDataResult {
     setIsLoading(true);
     setError(null);
 
-    const [digestRes, configRes, approvalRes, orderRes] = await Promise.all([
+    const [digestRes, snapshotRes, configRes, approvalRes, orderRes] = await Promise.all([
       supabase
         .from('agent_digests')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(DIGEST_LIMIT),
+      supabase
+        .from('agent_snapshots')
+        .select('tick_id, taken_at, tick_type, signals, drift')
+        .order('taken_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
       supabase.from('agent_config').select('*').eq('id', 1).single(),
       supabase
         .from('agent_approvals')
@@ -65,6 +73,8 @@ export function useAgentData(): UseAgentDataResult {
       setConfig(configRes.data as AgentConfig);
     }
 
+    setLatestSnapshot(snapshotRes.error ? null : ((snapshotRes.data ?? null) as AgentSnapshot | null));
+
     // Approvals and orders tables may not exist until migration 008 runs;
     // treat absent-table as empty rather than fatal.
     setApprovals(approvalRes.error ? [] : ((approvalRes.data ?? []) as AgentApproval[]));
@@ -75,7 +85,7 @@ export function useAgentData(): UseAgentDataResult {
 
   useEffect(() => {
     let cancelled = false;
-    load().catch(() => {
+    Promise.resolve().then(load).catch(() => {
       if (!cancelled) setError('load failed');
     });
     return () => {
@@ -83,5 +93,5 @@ export function useAgentData(): UseAgentDataResult {
     };
   }, [load]);
 
-  return { digests, config, approvals, orders, isLoading, error, refetch: load };
+  return { digests, latestSnapshot, config, approvals, orders, isLoading, error, refetch: load };
 }

@@ -59,13 +59,13 @@ export function useShippingSignals(): ShippingSignalsResult {
   const [latest, setLatest] = useState<LatestSignal[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [sourceStatus, setSourceStatus] = useState<SourceStatus[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(() => Boolean(supabase));
+  const [error, setError] = useState<string | null>(() =>
+    supabase ? null : 'Supabase not configured',
+  );
 
   useEffect(() => {
     if (!supabase) {
-      setIsLoading(false);
-      setError('Supabase not configured');
       return;
     }
     let cancelled = false;

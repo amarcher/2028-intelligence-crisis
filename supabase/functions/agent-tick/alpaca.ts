@@ -89,14 +89,15 @@ export interface PlaceOrderParams {
 
 /** Load creds from Edge Function env and construct an adapter. Throws if
  *  keys are missing — paper_mode defaults to TRUE (safe). */
-export function alpacaFromEnv(): AlpacaCredentials {
+export function alpacaFromEnv(paperModeOverride?: boolean): AlpacaCredentials {
   const keyId = Deno.env.get('ALPACA_KEY_ID');
   const secretKey = Deno.env.get('ALPACA_SECRET_KEY');
   if (!keyId || !secretKey) {
     throw new Error('Alpaca not configured (ALPACA_KEY_ID / ALPACA_SECRET_KEY missing)');
   }
-  // Default to paper. Only literal string 'false' activates live mode.
-  const paperMode = Deno.env.get('ALPACA_PAPER_MODE') !== 'false';
+  // Default to paper. Only literal string 'false' activates live mode unless
+  // the caller passes the database-backed rollout gate explicitly.
+  const paperMode = paperModeOverride ?? Deno.env.get('ALPACA_PAPER_MODE') !== 'false';
   return { keyId, secretKey, paperMode };
 }
 
@@ -255,6 +256,40 @@ export async function getLatestTrades(
     if (t && typeof t.p === 'number' && t.p > 0) {
       out.push({ ticker, price: t.p, asOf: String(t.t) });
     }
+  }
+  return out;
+}
+
+export interface DailyBar {
+  ticker: string;
+  close: number;
+  asOf: string;
+}
+
+export async function getDailyBars(
+  c: AlpacaCredentials,
+  symbols: readonly string[],
+  startIso: string,
+): Promise<Map<string, DailyBar[]>> {
+  if (symbols.length === 0) return new Map();
+  const qs = new URLSearchParams({
+    symbols: symbols.join(','),
+    timeframe: '1Day',
+    start: startIso,
+    adjustment: 'split',
+    limit: '10000',
+  });
+  const raw = await req<{ bars: Record<string, Array<{ c: number; t: string }>> }>(
+    c, 'GET', DATA_BASE, `/v2/stocks/bars?${qs.toString()}`,
+  );
+  const out = new Map<string, DailyBar[]>();
+  for (const [ticker, bars] of Object.entries(raw.bars ?? {})) {
+    out.set(
+      ticker,
+      bars
+        .filter((b) => typeof b.c === 'number' && b.c > 0)
+        .map((b) => ({ ticker, close: b.c, asOf: String(b.t) })),
+    );
   }
   return out;
 }

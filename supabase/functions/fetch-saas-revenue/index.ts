@@ -52,7 +52,7 @@ function fpToQuarterDate(fy: number, fp: string): string | null {
   return `${fy}-${month}-01`;
 }
 
-Deno.serve(async (_req: Request) => {
+Deno.serve(async () => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -100,14 +100,14 @@ Deno.serve(async (_req: Request) => {
 
       // Build revenue lookup by (fy, fp) for YoY calculation
       const revenueByKey = new Map<string, number>();
-      for (const [key, u] of quarterMap) {
+      for (const [, u] of quarterMap) {
         revenueByKey.set(key, u.val);
       }
 
       // Calculate YoY growth
       const rows: { series_id: string; date: string; value: number; source: string; fetched_at: string }[] = [];
 
-      for (const [key, u] of quarterMap) {
+      for (const [, u] of quarterMap) {
         const priorKey = `${u.fy - 1}-${u.fp}`;
         const priorRevenue = revenueByKey.get(priorKey);
 

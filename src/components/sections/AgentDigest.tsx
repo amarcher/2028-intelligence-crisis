@@ -3,7 +3,15 @@ import { COLORS } from '../../lib/constants';
 import { useAgentData } from '../../hooks/useAgentData';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
-import type { AgentApproval, AgentConfig, AgentDigest, AgentOrder, AgentProposal, VerdictType } from '../../lib/types';
+import type {
+  ActiveSleeveSnapshot,
+  AgentApproval,
+  AgentConfig,
+  AgentDigest,
+  AgentOrder,
+  AgentProposal,
+  VerdictType,
+} from '../../lib/types';
 import SectionCard from '../ui/SectionCard';
 import MiniStat from '../ui/MiniStat';
 
@@ -44,6 +52,17 @@ function sizeHintLabel(s: AgentProposal['size_hint']): string {
     case 'trim_third': return 'sell 1/3';
     case 'trim_half': return 'sell 1/2';
   }
+}
+
+function fmtPct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+function fmtUsd(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const sign = v < 0 ? '-' : '';
+  return `${sign}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`;
 }
 
 function ProposalRow({ p }: { p: AgentProposal }) {
@@ -402,6 +421,136 @@ function StatusStrip({
         change={digestCount >= 15 ? 'showing 15 most recent' : 'all digests'}
         signal="neutral"
       />
+    </div>
+  );
+}
+
+const ACTIVE_STANCE_COLOR: Record<ActiveSleeveSnapshot['stance'], string> = {
+  inactive: COLORS.textDim,
+  watch: COLORS.warning,
+  probe: COLORS.blue,
+  press: COLORS.accent,
+};
+
+function ActiveSleeveStrip({ active }: { active: ActiveSleeveSnapshot | undefined }) {
+  if (!active) return null;
+  const color = ACTIVE_STANCE_COLOR[active.stance];
+  const sleeve = active.currentSleeve;
+  const perf = active.performance;
+  const risk = active.riskBudget;
+  const addCapacityValue = sleeve
+    ? sleeve.addCapacityValue ?? sleeve.aiLongValue + sleeve.defensiveValue - sleeve.saasPutValue
+    : null;
+  const addAllowed = sleeve ? sleeve.addAllowed ?? (addCapacityValue ?? 0) > 0 : false;
+  const riskColor = risk?.posture === 'over_budget'
+    ? COLORS.accent
+    : risk?.posture === 'near_limit'
+      ? COLORS.warning
+      : COLORS.positive;
+
+  return (
+    <div
+      className="mb-4 rounded-md p-3"
+      style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}
+    >
+      <div className="flex items-center gap-2 flex-wrap mb-2">
+        <span
+          className="text-[9px] font-bold tracking-[0.1em] font-mono px-1.5 py-[2px] rounded"
+          style={{ color, background: `${color}18`, border: `1px solid ${color}40` }}
+        >
+          ACTIVE SLEEVE · {active.stance.toUpperCase()} · {active.score}/100
+        </span>
+        {risk && (
+          <span
+            className="text-[9px] font-bold tracking-[0.1em] font-mono px-1.5 py-[2px] rounded"
+            style={{ color: riskColor, background: `${riskColor}18`, border: `1px solid ${riskColor}40` }}
+          >
+            RISK · {risk.posture.replace(/_/g, ' ').toUpperCase()}
+          </span>
+        )}
+        <span className="text-[11px] font-mono" style={{ color: COLORS.textDim }}>
+          SaaS vs AI {fmtPct(active.momentum.saasVsAi20d)} over 20 trading days
+        </span>
+        <span className="text-[11px] font-mono" style={{ color: COLORS.textDim }}>
+          SaaS {fmtPct(active.momentum.saas20d)} · AI {fmtPct(active.momentum.ai20d)}
+        </span>
+      </div>
+
+      {(perf || risk) && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+          {perf && (
+            <>
+              <MiniStat
+                label="EQUITY"
+                value={fmtUsd(perf.equity)}
+                change={`cash ${fmtUsd(perf.cash)}`}
+                signal="neutral"
+              />
+              <MiniStat
+                label="TODAY"
+                value={fmtUsd(perf.dayProfitLoss)}
+                change={fmtPct(perf.dayProfitLossPct)}
+                signal={perf.dayProfitLoss >= 0 ? 'reassuring' : 'alarming'}
+              />
+            </>
+          )}
+          {risk && (
+            <>
+              <MiniStat
+                label="ACTIVE ROOM"
+                value={fmtUsd(risk.activeSleeveRoomValue)}
+                change={`${risk.activeSleeveUsedPct.toFixed(0)}% of ${risk.activeSleeveBudgetPct}% sleeve used`}
+                signal={risk.posture === 'over_budget' ? 'alarming' : risk.posture === 'near_limit' ? 'neutral' : 'reassuring'}
+              />
+              <MiniStat
+                label="GROSS EXPOSURE"
+                value={fmtPct(risk.grossExposurePct)}
+                change={fmtUsd(risk.grossExposureValue)}
+                signal={risk.grossExposurePct > 75 ? 'alarming' : risk.grossExposurePct > 50 ? 'neutral' : 'reassuring'}
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      {sleeve && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+          <MiniStat
+            label="SAAS PUTS"
+            value={fmtUsd(sleeve.saasPutValue)}
+            change={`${fmtUsd(sleeve.saasPutProfitLoss)} profit/loss`}
+            signal={sleeve.saasPutProfitLoss >= 0 ? 'reassuring' : 'alarming'}
+          />
+          <MiniStat
+            label="AI LONGS"
+            value={fmtUsd(sleeve.aiLongValue)}
+            change="QQQ / AI winners"
+            signal="neutral"
+          />
+          <MiniStat
+            label="SAFE-HAVEN"
+            value={fmtUsd(sleeve.defensiveValue)}
+            change="bonds / gold / staples"
+            signal="neutral"
+          />
+          <MiniStat
+            label="ADD ROOM"
+            value={addAllowed ? fmtUsd(addCapacityValue) : 'NO'}
+            change={addAllowed ? 'before SaaS exceeds offsets' : `${fmtUsd(addCapacityValue)} over cap`}
+            signal={addAllowed ? 'reassuring' : 'alarming'}
+          />
+        </div>
+      )}
+
+      {active.reasons.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {active.reasons.map((reason, i) => (
+            <div key={i} className="text-[11px] leading-[1.45]" style={{ color: COLORS.text }}>
+              {reason}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -883,8 +1032,9 @@ function OrdersList({ orders }: { orders: AgentOrder[] }) {
 }
 
 export default function AgentDigestSection() {
-  const { digests, config, approvals, orders, isLoading, error, refetch } = useAgentData();
+  const { digests, latestSnapshot, config, approvals, orders, isLoading, error, refetch } = useAgentData();
   const latest = digests[0];
+  const activeSleeve = latestSnapshot?.drift?.active_sleeve;
   const hasData = latest !== undefined;
   const pendingApprovals = approvals.filter((a) => a.status === 'pending' && new Date(a.expires_at) > new Date());
 
@@ -921,6 +1071,8 @@ export default function AgentDigestSection() {
         {config && <KillBanner config={config} />}
 
         <StatusStrip config={config} latest={latest} digestCount={digests.length} />
+
+        <ActiveSleeveStrip active={activeSleeve} />
 
         {isLoading && digests.length === 0 ? (
           <div

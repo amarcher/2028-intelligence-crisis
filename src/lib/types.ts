@@ -101,6 +101,59 @@ export interface AgentDigest {
   reasoner_status: string | null;
 }
 
+export interface ActiveSleeveSnapshot {
+  score: number;
+  stance: 'inactive' | 'watch' | 'probe' | 'press';
+  reasons: string[];
+  performance?: {
+    equity: number;
+    cash: number;
+    dayProfitLoss: number;
+    dayProfitLossPct: number;
+  } | null;
+  riskBudget?: {
+    activeSleeveBudgetPct: number;
+    activeSleeveBudgetValue: number;
+    activeSleeveUsedValue: number;
+    activeSleeveRoomValue: number;
+    activeSleeveUsedPct: number;
+    grossExposureValue: number;
+    grossExposurePct: number;
+    posture: 'room_to_press' | 'near_limit' | 'over_budget';
+  } | null;
+  saasRevenueTrend: {
+    latestAvg: number | null;
+    priorAvg: number | null;
+    delta: number | null;
+    deterioratingTickers: string[];
+  };
+  momentum: {
+    saas20d: number | null;
+    ai20d: number | null;
+    saasVsAi20d: number | null;
+    creditStress20d: number | null;
+  };
+  currentSleeve: {
+    saasPutValue: number;
+    saasPutProfitLoss: number;
+    aiLongValue: number;
+    defensiveValue: number;
+    addAllowed: boolean;
+    addCapacityValue: number;
+  } | null;
+}
+
+export interface AgentSnapshot {
+  tick_id: string;
+  taken_at: string;
+  tick_type: TickType;
+  signals: Record<string, unknown>;
+  drift: {
+    active_sleeve?: ActiveSleeveSnapshot;
+    [key: string]: unknown;
+  } | null;
+}
+
 export interface AgentConfig {
   id: number;
   enabled: boolean;

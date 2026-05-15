@@ -96,6 +96,48 @@ export interface OptionChainSnapshot {
   strikes: number[];
 }
 
+export interface ActiveSleeveSummary {
+  score: number;
+  stance: 'inactive' | 'watch' | 'probe' | 'press';
+  reasons: string[];
+  performance: {
+    equity: number;
+    cash: number;
+    dayProfitLoss: number;
+    dayProfitLossPct: number;
+  } | null;
+  riskBudget: {
+    activeSleeveBudgetPct: number;
+    activeSleeveBudgetValue: number;
+    activeSleeveUsedValue: number;
+    activeSleeveRoomValue: number;
+    activeSleeveUsedPct: number;
+    grossExposureValue: number;
+    grossExposurePct: number;
+    posture: 'room_to_press' | 'near_limit' | 'over_budget';
+  } | null;
+  saasRevenueTrend: {
+    latestAvg: number | null;
+    priorAvg: number | null;
+    delta: number | null;
+    deterioratingTickers: string[];
+  };
+  momentum: {
+    saas20d: number | null;
+    ai20d: number | null;
+    saasVsAi20d: number | null;
+    creditStress20d: number | null;
+  };
+  currentSleeve: {
+    saasPutValue: number;
+    saasPutProfitLoss: number;
+    aiLongValue: number;
+    defensiveValue: number;
+    addAllowed: boolean;
+    addCapacityValue: number;
+  } | null;
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
@@ -120,6 +162,10 @@ export interface ReasonerInput {
    *  here (fetch failed or ticker outside the pre-load set) the reasoner
    *  falls back to tape-anchored guessing. */
   optionChains?: OptionChainSnapshot[];
+  /** Fast, thesis-specific paper-sleeve read. This is not a phase flip: it
+   *  asks whether SaaS is weakening relative to AI/knowledge-work winners
+   *  before the broad macro break appears. */
+  activeSleeve?: ActiveSleeveSummary;
 }
 
 export type ProposalAction =
@@ -193,9 +239,19 @@ const MODEL = 'claude-opus-4-7';
 // ---------- static prompt (cached) ----------
 // This string is frozen. Never interpolate timestamps, tick IDs, or anything
 // that varies per invocation here — that would break the prompt cache.
-const SYSTEM_PROMPT = `You are the reasoning agent behind the 2028 Tracker dashboard. The dashboard tracks a specific economic prediction (Citrini Research "2028 GIC") published in February 2026: a chain reaction starting from AI eating into corporate-software revenue, leading to white-collar layoffs, then a drop in consumer spending, then financial-system stress — the S&P 500 peaks near 8,000 in late 2026 and falls ~56% to ~3,500 by mid-2027. The user believes the prediction is directionally right but the timing is delayed 6–18 months. Your job is to read the current state of five economic readings, decide what to do, and produce a digest for the user (a non-investor) to review and execute manually in their own brokerage account.
+const SYSTEM_PROMPT = `You are the reasoning agent behind the 2028 Tracker dashboard. The dashboard tracks a specific economic prediction (Citrini Research "2028 GIC") published in February 2026: a chain reaction starting from AI eating into corporate-software revenue, leading to white-collar layoffs, then a drop in consumer spending, then financial-system stress — the S&P 500 peaks near 8,000 in late 2026 and falls ~56% to ~3,500 by mid-2027.
 
-You do not trade. You do not have account access. You do not see positions or profit-and-loss. You write suggestions; the user decides whether to act on them.
+The user's modified view is NOT just "Citrini, but delayed." The user believes the broad crisis may still be directionally right, but the near-term driver is different:
+
+- Knowledge work and AI infrastructure may stay valuable for longer than the original prediction implies.
+- Non-SaaS AI winners can keep working while enterprises use AI to do more knowledge work, not less.
+- SaaS is the cleaner early short because agents can subsume many workflow/software functions before white-collar employment fully breaks.
+- The broad labor/consumer/credit crisis is a later phase. Do not short the whole economy just because SaaS is vulnerable.
+- Therefore, in the Waiting phase, the active job is to watch whether SaaS is losing relative strength versus AI/knowledge-work winners. If it is, small paper-mode SaaS put adds/rotations can be justified even when 0 of 5 slow macro readings have crossed.
+
+Your job is to read the current state of the slow macro readings and the modified-thesis active-sleeve summary, decide what to do, and produce a digest for the user (a non-investor) to review. In auto-execute paper mode, clean proposals may be sent to Alpaca paper trading after guardrails.
+
+You do not control risk. Code guardrails control sizing and execution. Your job is to propose small, explainable changes only when the evidence supports them.
 
 ## VERY IMPORTANT: write everything you send to the user in plain English
 
@@ -243,7 +299,16 @@ These are the dashboard's primary triggers. At least two must fire to move from 
 ## Phase policy
 
 **Phase 1 · Counterfactual Grind** (0–1 signals fired):
-Hold the setup. Keep cheap long-dated SaaS LEAPS puts on NOW/CRM/HUBS/WDAY/DDOG, Jan 2027 and Jan 2028 expiries, 20–30% OTM. Carry TLT + GLD + XLP as counterfactual hedges. Small QQQ/SMH longs for the AI-bubble leg. Do not deploy the short book yet. Position hygiene: roll any LEAPS with DTE < 90 to the next January expiry (size-preserving). Rule of thirds on profitable puts — sell 1/3 at 2× entry, 1/3 at 4×, let 1/3 ride to thesis completion.
+Keep the slow setup. Hold long-dated SaaS puts on NOW/CRM/HUBS/WDAY/DDOG, Jan 2027 and Jan 2028 expiries, 20–30% below today's stock price. Carry TLT + GLD + XLP as safe-haven positions. Small QQQ/SMH/selected AI longs are allowed while knowledge work and AI infrastructure remain bid. Do not deploy broad market or credit shorts yet.
+
+Modified-thesis active sleeve in Phase 1:
+- The active sleeve can add or rotate small SaaS put exposure before the macro phase flips, but only when the "Modified-thesis active sleeve" block says stance = probe or press.
+- Prefer rotating within SaaS puts over adding gross exposure when SaaS put exposure is already larger than AI longs plus defensive positions.
+- Prefer names with both weak stock momentum and weakening software-revenue growth.
+- Do not close AI longs merely because SaaS is weak. Close or trim AI longs only when broad macro readings start breaking, VIX is rising sharply, or the active summary shows AI momentum has also turned down.
+- If active stance = inactive or watch, holding is usually correct unless there is a sizing or expiry hygiene problem.
+
+Position hygiene: roll any long-dated put options with less than 90 days until expiry to the next January expiry (same size). Rule of thirds on profitable puts — sell 1/3 at 2× entry, 1/3 at 4×, let 1/3 ride to scenario completion.
 
 **Phase 2 · Inflection** (2+ signals fired):
 Flip the book. Close AI-euphoria longs (QQQ, SMH, NVDA, AVGO, hyperscalers). Roll SaaS LEAPS to 3–6 month near-dated puts to harvest gamma. Add SPY/QQQ put spreads (3–6 month, 10–20% OTM). Layer credit shorts: HYG puts, KRE puts, IYR/VNQ/BXP/SLG for commercial real estate exposure. Maintain 15–20% dry powder for bear rallies. The first 2-signal crossing is not a signal to sell everything — it's a signal to START rotating.
@@ -283,6 +348,31 @@ Each tick receives week-over-week deltas for JOLTS, claims, S&P 500, and Case-Sh
 - **Thesis-aligned** — JOLTS falling, claims rising, S&P falling, Case-Shiller decelerating or falling. Narrative: hold, thesis working. Small adds to existing asymmetric positions are OK; don't initiate new ones on thesis-aligned prints alone.
 - **Counterfactual** — JOLTS rising, claims falling, S&P ripping higher on broadening breadth, Case-Shiller accelerating. Narrative: trim asymmetric exposure up to 10% of current notional; add small to defensive carry (TLT, GLD, XLP).
 - **Mixed / noisy** — one print goes each way. Narrative: hold; note the mixed signal in drift_notes.
+
+## Modified-thesis active sleeve
+
+When present, the user message includes a "Modified-thesis active sleeve" block. This block is the fast layer. It does NOT replace the five slow macro readings and it does NOT move the system to the Action phase. It answers a narrower question: "Is SaaS being repriced as agent-vulnerable while AI/knowledge-work winners still hold up?"
+
+Use the active stance this way:
+- inactive (0–24): do not add active risk.
+- watch (25–49): name what would make you act, but usually hold.
+- probe (50–69): one small SaaS put add or one rotation is allowed in paper mode, especially if current SaaS put exposure is not already oversized.
+- press (70–100): up to two SaaS put adds/rotations are allowed in paper mode, still within guardrails. Do not broaden to SPY/QQQ/credit shorts unless the slow macro phase also flips.
+
+If stance = probe or press and the account already has the starter book, do not default to a bare hold. Emit at least one concrete SaaS put add or rotation when Current sleeve says "add allowed: yes." If it says "add allowed: no," do not add gross exposure; rotate within SaaS only if there is an obvious weaker target. Do not recompute the exposure test yourself — use the provided yes/no flag.
+
+Use the risk budget as the final sizing gate:
+- room_to_press: clean probe/press signals may add a starter position.
+- near_limit: prefer rotations or trims; add only if the signal is press and the rationale is unusually clean.
+- over_budget: do not add. If the active sleeve is winning, hold or trim by rule of thirds; if it is losing, reduce the weakest position.
+- A good plan has an explicit "why we press" and "why we stop" condition. Do not just say "hold" when risk room is available and the active score is probe/press; explain what evidence is still missing.
+
+Active sleeve evidence is strongest when all three are true:
+- SaaS stock momentum is weak relative to AI winners (negative saasVsAi20d).
+- SaaS revenue growth is decelerating across multiple names.
+- Credit/VIX is starting to wobble without a full macro break.
+
+If active sleeve and slow macro disagree, keep the disagreement explicit: "Broad economy not breaking yet, but software is weakening relative to AI winners." That is the user's modified prediction.
 
 ## Shipping pulse — corroborator only
 
@@ -528,6 +618,43 @@ function renderShippingPulse(sp: ShippingPulseSummary | undefined): string {
     .join('\n');
 }
 
+function fmtPctOrDash(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+function renderActiveSleeve(active: ActiveSleeveSummary | undefined): string {
+  if (!active) {
+    return '(not provided — no fast-layer market read available; use slow readings only)';
+  }
+  const trend = active.saasRevenueTrend;
+  const momentum = active.momentum;
+  const sleeve = active.currentSleeve;
+  const perf = active.performance;
+  const risk = active.riskBudget;
+  const reasons = active.reasons.length > 0
+    ? active.reasons.map((r) => `  - ${r}`).join('\n')
+    : '  - No strong fast-layer evidence.';
+  const sleeveLine = sleeve
+    ? `Current sleeve: SaaS puts $${sleeve.saasPutValue.toFixed(0)} (${sleeve.saasPutProfitLoss >= 0 ? '+' : ''}$${sleeve.saasPutProfitLoss.toFixed(0)} profit/loss) · AI longs $${sleeve.aiLongValue.toFixed(0)} · safe-haven $${sleeve.defensiveValue.toFixed(0)} · add allowed: ${sleeve.addAllowed ? 'yes' : 'no'} (${sleeve.addCapacityValue >= 0 ? '$' : '-$'}${Math.abs(sleeve.addCapacityValue).toFixed(0)} before SaaS puts exceed AI + safe-haven)`
+    : 'Current sleeve: not available';
+  const performanceLine = perf
+    ? `Performance: equity $${perf.equity.toFixed(0)} · cash $${perf.cash.toFixed(0)} · today ${perf.dayProfitLoss >= 0 ? '+' : ''}$${perf.dayProfitLoss.toFixed(0)} (${fmtPctOrDash(perf.dayProfitLossPct)})`
+    : 'Performance: not available';
+  const riskLine = risk
+    ? `Risk budget: posture ${risk.posture} · active sleeve used $${risk.activeSleeveUsedValue.toFixed(0)} of $${risk.activeSleeveBudgetValue.toFixed(0)} (${risk.activeSleeveUsedPct.toFixed(1)}% used) · room $${risk.activeSleeveRoomValue.toFixed(0)} · gross exposure ${risk.grossExposurePct.toFixed(1)}% of equity`
+    : 'Risk budget: not available';
+
+  return `stance ${active.stance} · score ${active.score}/100
+SaaS revenue trend: latest avg ${fmtPctOrDash(trend.latestAvg)} · prior avg ${fmtPctOrDash(trend.priorAvg)} · change ${fmtPctOrDash(trend.delta)} · weakening names ${trend.deterioratingTickers.join(', ') || 'none'}
+Market momentum: SaaS 20d ${fmtPctOrDash(momentum.saas20d)} · AI winners 20d ${fmtPctOrDash(momentum.ai20d)} · SaaS minus AI ${fmtPctOrDash(momentum.saasVsAi20d)} · credit stress proxy ${fmtPctOrDash(momentum.creditStress20d)}
+${performanceLine}
+${riskLine}
+${sleeveLine}
+Reasons:
+${reasons}`;
+}
+
 function formatShippingValue(v: number, unit: string): string {
   switch (unit) {
     case 'usd_per_40ft':
@@ -548,7 +675,7 @@ function formatShippingValue(v: number, unit: string): string {
 export function buildUserMessage(input: ReasonerInput): string {
   const {
     tickType, signals, drift, recentDigests, account, positions, shippingPulse, tapeQuotes,
-    optionChains,
+    optionChains, activeSleeve,
   } = input;
   return `tick_type: ${tickType}
 
@@ -574,10 +701,13 @@ ${renderWow('Case-Shiller national', drift.caseShiller)}${drift.vix ? `\n${rende
 Shipping pulse (corroborator — never initiates a proposal):
 ${renderShippingPulse(shippingPulse)}
 
+Modified-thesis active sleeve (fast layer — SaaS-vs-AI, does not trigger Action phase):
+${renderActiveSleeve(activeSleeve)}
+
 Recent digests (most-recent first):
 ${renderRecentDigests(recentDigests)}
 
-Now evaluate the kill-switch, classify drift, **check current positions against the Phase-1 book expectations**, and submit the digest. Remember: if the account has no positions, the book must be OPENED, not held. If ≥ 2 anti-thesis signals fire, the digest must be exactly one unwind_all proposal.`;
+Now evaluate the kill-switch, classify drift, check the modified-thesis active sleeve, **check current positions against the Phase-1 book expectations**, and submit the digest. Remember: if the account has no positions, the book must be OPENED, not held. If ≥ 2 anti-thesis signals fire, the digest must be exactly one unwind_all proposal.`;
 }
 
 // ---------- raw API types (just what we consume) ----------
