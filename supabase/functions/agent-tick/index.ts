@@ -11,6 +11,7 @@ import { computeSignals } from '../../../src/lib/signals.ts';
 import type { DataPoint, SaaSDataPoint } from '../../../src/lib/types.ts';
 import {
   runReasoner,
+  type ActiveSleeveSummary,
   type AccountSummary,
   type DriftSummary,
   type OptionChainSnapshot,
@@ -26,10 +27,13 @@ import {
 import {
   alpacaFromEnv,
   getAccount,
+  getDailyBars,
   getLatestTrades,
   getOptionsChain,
   getPositions,
+  type AlpacaAccount,
   type AlpacaCredentials,
+  type DailyBar,
 } from './alpaca.ts';
 import { WHITELIST } from './filter.ts';
 
@@ -107,6 +111,16 @@ const SAAS_SERIES: Array<{ id: string; field: keyof Omit<SaaSDataPoint, 'date'> 
   { id: 'saas_DDOG', field: 'datadog' },
 ];
 
+const SAAS_TICKERS = ['NOW', 'CRM', 'HUBS', 'WDAY', 'DDOG', 'FRSH'] as const;
+const AI_WINNER_TICKERS = ['QQQ', 'SMH', 'IGV', 'NVDA', 'AVGO', 'MSFT', 'GOOGL', 'META'] as const;
+const CREDIT_STRESS_TICKERS = ['HYG', 'KRE', 'IYR'] as const;
+const DEFENSIVE_TICKERS = new Set(['TLT', 'GLD', 'IAU', 'XLP', 'KO', 'PG', 'COST', 'WMT']);
+const ACTIVE_BAR_UNIVERSE = [
+  ...SAAS_TICKERS,
+  ...AI_WINNER_TICKERS,
+  ...CREDIT_STRESS_TICKERS,
+] as const;
+
 const MEMORY_DEPTH: Record<TickType, number> = {
   premarket: 3,
   close: 3,
@@ -163,9 +177,11 @@ Deno.serve(async (req: Request) => {
     let positionSummaries: PositionSummary[] | undefined;
     let tapeQuotes: TapeReading[] | undefined;
     let optionChains: OptionChainSnapshot[] | undefined;
+    let activeSleeve: ActiveSleeveSummary | undefined;
     if (config.mode === 'auto_execute' && config.phase !== 'shadow') {
       try {
-        const creds = alpacaFromEnv();
+        const paperMode = config.paper_mode !== false;
+        const creds = alpacaFromEnv(paperMode);
         const [acct, pos, tape] = await Promise.all([
           getAccount(creds),
           getPositions(creds),
@@ -196,7 +212,22 @@ Deno.serve(async (req: Request) => {
         // universe so the reasoner picks strikes that actually exist.
         // Ordered after the parallel batch because the chain window uses spot.
         const tapeByTicker = new Map(tape.map((t) => [t.ticker, t.price] as const));
-        optionChains = await loadOptionChainSnapshots(creds, tapeByTicker);
+        const barsSince = new Date(Date.now() - 90 * 86_400_000).toISOString();
+        const [chains, bars] = await Promise.all([
+          loadOptionChainSnapshots(creds, tapeByTicker),
+          getDailyBars(creds, ACTIVE_BAR_UNIVERSE, barsSince).catch((e) => {
+            console.warn('getDailyBars failed (non-fatal):', String(e).slice(0, 200));
+            return new Map();
+          }),
+        ]);
+        optionChains = chains;
+        activeSleeve = buildActiveSleeveSummary({
+          account: acct,
+          saas,
+          positions: pos,
+          bars,
+          drift,
+        });
       } catch (e) {
         console.warn('Alpaca state load failed (non-fatal):', String(e).slice(0, 200));
       }
@@ -214,7 +245,11 @@ Deno.serve(async (req: Request) => {
           verdict: result.verdict,
           signals: result.signals,
         },
-        drift: { ...drift, generated_at: new Date().toISOString() },
+        drift: {
+          ...drift,
+          generated_at: new Date().toISOString(),
+          ...(activeSleeve ? { active_sleeve: activeSleeve } : {}),
+        },
       })
       .select('tick_id')
       .single();
@@ -235,6 +270,7 @@ Deno.serve(async (req: Request) => {
         shippingPulse,
         tapeQuotes,
         optionChains,
+        activeSleeve,
       });
 
       digestRow = {
@@ -302,6 +338,7 @@ Deno.serve(async (req: Request) => {
       narrative: String(digestRow.narrative),
       proposals: (digestRow.proposals as Proposal[] | undefined) ?? [],
       drift_notes: (digestRow.drift_notes as string | null) ?? null,
+      active_sleeve: activeSleeve ?? null,
       reasoner_status: String(digestRow.reasoner_status),
     });
     await supabase
@@ -318,10 +355,11 @@ Deno.serve(async (req: Request) => {
       halted: Boolean(config.halted),
       halt_reason: (config.halt_reason as string | null) ?? null,
       phase: execPhase,
+      paper_mode: config.paper_mode !== false,
     };
     let execution = null;
     if (config.mode === 'auto_execute' && execPhase !== 'shadow') {
-      const supa = buildExecutionSupa(supabase, insertedDigest.id);
+      const supa = buildExecutionSupa(supabase);
       execution = await orchestrateExecution({
         digestId: insertedDigest.id,
         config: execConfig,
@@ -511,6 +549,195 @@ function weekOverWeek(data: DataPoint[]): WowSummary {
   };
 }
 
+const SAAS_FIELD_BY_TICKER: Record<(typeof SAAS_TICKERS)[number], keyof Omit<SaaSDataPoint, 'date'>> = {
+  NOW: 'servicenow',
+  CRM: 'salesforce',
+  HUBS: 'hubspot',
+  WDAY: 'workday',
+  DDOG: 'datadog',
+  FRSH: 'freshworks',
+};
+
+function returnOverBars(bars: DailyBar[] | undefined, lookback: number): number | null {
+  if (!bars || bars.length < lookback + 1) return null;
+  const last = bars[bars.length - 1]?.close;
+  const prior = bars[bars.length - 1 - lookback]?.close;
+  if (!last || !prior) return null;
+  return ((last - prior) / prior) * 100;
+}
+
+function avgNonNull(vals: Array<number | null>): number | null {
+  const clean = vals.filter((v): v is number => v != null && Number.isFinite(v));
+  if (clean.length === 0) return null;
+  return clean.reduce((s, v) => s + v, 0) / clean.length;
+}
+
+function latestSaasRow(saas: SaaSDataPoint[]): SaaSDataPoint | null {
+  for (let i = saas.length - 1; i >= 0; i--) {
+    const row = saas[i];
+    if (SAAS_TICKERS.some((t) => row[SAAS_FIELD_BY_TICKER[t]] != null)) return row;
+  }
+  return null;
+}
+
+function priorSaasRow(saas: SaaSDataPoint[], latestDate: string): SaaSDataPoint | null {
+  for (let i = saas.length - 1; i >= 0; i--) {
+    const row = saas[i];
+    if (row.date >= latestDate) continue;
+    if (SAAS_TICKERS.some((t) => row[SAAS_FIELD_BY_TICKER[t]] != null)) return row;
+  }
+  return null;
+}
+
+function buildActiveSleeveSummary(input: {
+  account: AlpacaAccount;
+  saas: SaaSDataPoint[];
+  positions: AlpacaPosition[];
+  bars: Map<string, DailyBar[]>;
+  drift: DriftSummary;
+}): ActiveSleeveSummary {
+  const latest = latestSaasRow(input.saas);
+  const prior = latest ? priorSaasRow(input.saas, latest.date) : null;
+  const latestAvg = latest
+    ? avgNonNull(SAAS_TICKERS.map((t) => latest[SAAS_FIELD_BY_TICKER[t]]))
+    : null;
+  const priorAvg = prior
+    ? avgNonNull(SAAS_TICKERS.map((t) => prior[SAAS_FIELD_BY_TICKER[t]]))
+    : null;
+  const revenueDelta = latestAvg != null && priorAvg != null ? latestAvg - priorAvg : null;
+  const deterioratingTickers = latest && prior
+    ? SAAS_TICKERS.filter((t) => {
+      const field = SAAS_FIELD_BY_TICKER[t];
+      const now = latest[field];
+      const before = prior[field];
+      return now != null && before != null && now < before - 1;
+    })
+    : [];
+
+  const saas20d = avgNonNull(SAAS_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
+  const ai20d = avgNonNull(AI_WINNER_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
+  const creditStress20d = avgNonNull(CREDIT_STRESS_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
+  const saasVsAi20d = saas20d != null && ai20d != null ? saas20d - ai20d : null;
+
+  const sleeveTotals = input.positions.reduce(
+    (acc, p) => {
+      const symbol = p.asset_class === 'us_option'
+        ? (p.symbol.match(/^([A-Z]{1,6})/)?.[1] ?? p.symbol)
+        : p.symbol;
+      const mv = Math.abs(p.market_value);
+      if (p.asset_class === 'us_option' && SAAS_TICKERS.includes(symbol as (typeof SAAS_TICKERS)[number])) {
+        acc.saasPutValue += mv;
+        acc.saasPutProfitLoss += p.unrealized_pl;
+      } else if (AI_WINNER_TICKERS.includes(symbol as (typeof AI_WINNER_TICKERS)[number])) {
+        acc.aiLongValue += mv;
+      } else if (DEFENSIVE_TICKERS.has(symbol)) {
+        acc.defensiveValue += mv;
+      }
+      return acc;
+    },
+    { saasPutValue: 0, saasPutProfitLoss: 0, aiLongValue: 0, defensiveValue: 0 },
+  );
+  const addCapacityValue =
+    sleeveTotals.aiLongValue + sleeveTotals.defensiveValue - sleeveTotals.saasPutValue;
+  const currentSleeve = {
+    ...sleeveTotals,
+    addAllowed: addCapacityValue > 0,
+    addCapacityValue,
+  };
+  const grossExposureValue = input.positions.reduce((sum, p) => sum + Math.abs(p.market_value), 0);
+  const activeSleeveUsedValue = sleeveTotals.saasPutValue;
+  const activeSleeveBudgetPct = 20;
+  const activeSleeveBudgetValue = input.account.equity * (activeSleeveBudgetPct / 100);
+  const activeSleeveRoomValue = activeSleeveBudgetValue - activeSleeveUsedValue;
+  const activeSleeveUsedPct = activeSleeveBudgetValue > 0
+    ? (activeSleeveUsedValue / activeSleeveBudgetValue) * 100
+    : 0;
+  const grossExposurePct = input.account.equity > 0
+    ? (grossExposureValue / input.account.equity) * 100
+    : 0;
+  const posture: NonNullable<ActiveSleeveSummary['riskBudget']>['posture'] =
+    activeSleeveRoomValue < 0
+      ? 'over_budget'
+      : activeSleeveUsedPct >= 80
+        ? 'near_limit'
+        : 'room_to_press';
+  const dayProfitLoss = input.account.equity - input.account.last_equity;
+  const dayProfitLossPct = input.account.last_equity > 0
+    ? (dayProfitLoss / input.account.last_equity) * 100
+    : 0;
+
+  let score = 0;
+  const reasons: string[] = [];
+  if (saasVsAi20d != null) {
+    if (saasVsAi20d <= -5) {
+      score += 40;
+      reasons.push(`SaaS stocks are trailing AI/knowledge-work winners by ${Math.abs(saasVsAi20d).toFixed(1)} points over 20 trading days.`);
+    } else if (saasVsAi20d <= -2) {
+      score += 15;
+      reasons.push(`SaaS is starting to lag AI winners by ${Math.abs(saasVsAi20d).toFixed(1)} points over 20 trading days.`);
+    }
+  }
+  if (saas20d != null && saas20d <= -5) {
+    score += 20;
+    reasons.push(`The SaaS basket itself is down ${Math.abs(saas20d).toFixed(1)}% over 20 trading days.`);
+  }
+  if (revenueDelta != null && revenueDelta <= -1) {
+    score += deterioratingTickers.length >= 3 ? 20 : 10;
+    reasons.push(`Average SaaS revenue growth slowed by ${Math.abs(revenueDelta).toFixed(1)} points quarter over quarter.`);
+  }
+  if (creditStress20d != null && creditStress20d <= -3) {
+    score += 15;
+    reasons.push(`Credit and bank/real-estate proxies are down ${Math.abs(creditStress20d).toFixed(1)}% over 20 trading days.`);
+  }
+  if (input.drift.vix?.wow_pct != null && input.drift.vix.wow_pct >= 10) {
+    score += 10;
+    reasons.push(`VIX rose ${input.drift.vix.wow_pct.toFixed(1)}% week over week, so market stress is picking up.`);
+  }
+  if (ai20d != null && ai20d > 0 && saasVsAi20d != null && saasVsAi20d < -2) {
+    score += 10;
+    reasons.push('AI/knowledge-work winners are still positive while SaaS lags, matching the modified prediction.');
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const stance: ActiveSleeveSummary['stance'] =
+    score >= 70 ? 'press' : score >= 50 ? 'probe' : score >= 25 ? 'watch' : 'inactive';
+
+  return {
+    score,
+    stance,
+    reasons,
+    performance: {
+      equity: input.account.equity,
+      cash: input.account.cash,
+      dayProfitLoss,
+      dayProfitLossPct,
+    },
+    riskBudget: {
+      activeSleeveBudgetPct,
+      activeSleeveBudgetValue,
+      activeSleeveUsedValue,
+      activeSleeveRoomValue,
+      activeSleeveUsedPct,
+      grossExposureValue,
+      grossExposurePct,
+      posture,
+    },
+    saasRevenueTrend: {
+      latestAvg,
+      priorAvg,
+      delta: revenueDelta,
+      deterioratingTickers,
+    },
+    momentum: {
+      saas20d,
+      ai20d,
+      saasVsAi20d,
+      creditStress20d,
+    },
+    currentSleeve,
+  };
+}
+
 async function incrementDeadman(
   supabase: ReturnType<typeof createClient>,
   reason: string,
@@ -543,7 +770,6 @@ function json(body: unknown, status = 200): Response {
 // supabase-js calls, scoped to a single digest's execution run.
 function buildExecutionSupa(
   supabase: ReturnType<typeof createClient>,
-  _digestId: string,
 ): ExecutionSupabase {
   return {
     async insertOrder(row: AgentOrderRow) {

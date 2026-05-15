@@ -27,7 +27,7 @@ Deno.serve(async () => {
   try {
     const { data: config, error: configErr } = await supabase
       .from('agent_config')
-      .select('enabled, mode, phase, halted')
+      .select('enabled, mode, phase, paper_mode, halted')
       .eq('id', 1)
       .single();
 
@@ -42,7 +42,7 @@ Deno.serve(async () => {
 
     let creds: AlpacaCredentials;
     try {
-      creds = alpacaFromEnv();
+      creds = alpacaFromEnv(config.paper_mode !== false);
     } catch (e) {
       return json({ skipped: true, reason: `alpaca not configured: ${String(e).slice(0, 200)}` });
     }

@@ -10,7 +10,7 @@
 //   SLACK_WEBHOOK_URL       — required to enable Slack
 //   DASHBOARD_URL           — optional; included as a permalink in the digest
 
-import type { Proposal } from './reasoner.ts';
+import type { ActiveSleeveSummary, Proposal } from './reasoner.ts';
 
 export interface DigestPayload {
   tick_type: 'premarket' | 'close' | 'weekly';
@@ -20,6 +20,7 @@ export interface DigestPayload {
   narrative: string;
   proposals: Proposal[];
   drift_notes: string | null;
+  active_sleeve: ActiveSleeveSummary | null;
   reasoner_status: string;
 }
 
@@ -94,12 +95,56 @@ function formatProposal(p: Proposal, i: number): string {
   return `${i + 1}. *${actionLabel(p.action)}* ${p.ticker}${instr}${expiry}${strike} — _${sizeLabel(p.size_hint)}_ · ${urgencyLabel(p.urgency)}\n   ${p.rationale}`;
 }
 
+function fmtUsd(n: number): string {
+  const sign = n < 0 ? '-' : '';
+  return `${sign}$${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
+}
+
+function fmtPct(n: number): string {
+  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
+}
+
+function formatActiveSleeve(active: ActiveSleeveSummary | null): string {
+  if (!active) return '';
+  const risk = active.riskBudget;
+  const perf = active.performance;
+  const sleeve = active.currentSleeve;
+  const lines = [
+    `*Active trading read:* ${active.stance.toUpperCase()} · ${active.score}/100`,
+    `SaaS vs AI: ${active.momentum.saasVsAi20d == null ? '—' : fmtPct(active.momentum.saasVsAi20d)} over 20 trading days ` +
+      `(SaaS ${active.momentum.saas20d == null ? '—' : fmtPct(active.momentum.saas20d)} · AI ${active.momentum.ai20d == null ? '—' : fmtPct(active.momentum.ai20d)})`,
+  ];
+  if (risk) {
+    lines.push(
+      `Risk room: ${risk.posture.replace(/_/g, ' ')} · ${fmtUsd(risk.activeSleeveRoomValue)} active room ` +
+        `(${risk.activeSleeveUsedPct.toFixed(0)}% of ${risk.activeSleeveBudgetPct}% sleeve used) · gross exposure ${fmtPct(risk.grossExposurePct)}`,
+    );
+  }
+  if (perf) {
+    lines.push(
+      `Portfolio: equity ${fmtUsd(perf.equity)} · cash ${fmtUsd(perf.cash)} · today ${fmtUsd(perf.dayProfitLoss)} (${fmtPct(perf.dayProfitLossPct)})`,
+    );
+  }
+  if (sleeve) {
+    lines.push(
+      `Sleeve: SaaS puts ${fmtUsd(sleeve.saasPutValue)} (${fmtUsd(sleeve.saasPutProfitLoss)} profit/loss) · ` +
+        `AI longs ${fmtUsd(sleeve.aiLongValue)} · safe-haven ${fmtUsd(sleeve.defensiveValue)} · ` +
+        `SaaS add room ${fmtUsd(sleeve.addCapacityValue)}`,
+    );
+  }
+  if (active.reasons.length > 0) {
+    lines.push(`Why: ${active.reasons.join(' ')}`);
+  }
+  return `\n\n${lines.join('\n')}`;
+}
+
 function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
   const header = d.kill_switch_triggered
     ? `🛑 *Abort signal* — the economy is moving the opposite way from what we expected. The agent recommends closing every position.`
     : `*${phaseLabel(d.phase)}* · ${d.fired_count} of 5 economic readings have crossed the danger line · _${tickTypeLabel(d.tick_type)}_`;
 
   const drift = d.drift_notes ? `\n\n*This week's economic update:* ${d.drift_notes}` : '';
+  const activeSleeve = formatActiveSleeve(d.active_sleeve);
 
   const proposals =
     d.proposals.length > 0
@@ -110,7 +155,7 @@ function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
     ? `\n\n—\n<${dashboardUrl}|Open the dashboard>`
     : '';
 
-  return `${header}\n\n${d.narrative}${drift}${proposals}${footer}`;
+  return `${header}\n\n${d.narrative}${activeSleeve}${drift}${proposals}${footer}`;
 }
 
 // Light HTML conversion for email — keeps formatting legible in Gmail etc.

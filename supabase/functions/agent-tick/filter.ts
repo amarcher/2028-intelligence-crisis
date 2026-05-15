@@ -38,7 +38,7 @@ const LEVERAGED_INVERSE = new Set(['SPXS', 'SQQQ', 'SRTY', 'TZA', 'SPXU', 'SDOW'
 
 // Matches "Jan 2027", "January 2027", "Jan '27", "01/2027".
 const EXPIRY_LONG = /^([A-Za-z]{3,9})\s+(?:'?(\d{2}|\d{4}))$/;
-const EXPIRY_NUMERIC = /^(\d{1,2})[\/\-](\d{2}|\d{4})$/;
+const EXPIRY_NUMERIC = /^(\d{1,2})[/-](\d{2}|\d{4})$/;
 
 const MONTHS: Record<string, number> = {
   jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2,

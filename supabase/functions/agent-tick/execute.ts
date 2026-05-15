@@ -21,12 +21,10 @@ import {
   alpacaFromEnv,
   cancelAllOrders,
   getAccount,
-  getOpenOrders,
   getOptionsChain,
   getPositions,
   placeOrder,
   type AlpacaCredentials,
-  type AlpacaOrder,
   type AlpacaAccount,
   type AlpacaPosition,
   type PlaceOrderParams,
@@ -114,7 +112,7 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
 
   let creds: AlpacaCredentials;
   try {
-    creds = alpacaFromEnv();
+    creds = alpacaFromEnv(input.config.paper_mode);
   } catch (e) {
     return {
       mode: 'auto_execute',
@@ -184,14 +182,12 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
 
   let account: AlpacaAccount;
   let positions: AlpacaPosition[];
-  let openOrders: AlpacaOrder[];
   let todayOrders: PriorOrderSummary[];
 
   try {
-    [account, positions, openOrders, todayOrders] = await Promise.all([
+    [account, positions, todayOrders] = await Promise.all([
       getAccount(creds),
       getPositions(creds),
-      getOpenOrders(creds),
       input.supa.todayOrders(),
     ]);
   } catch (e) {

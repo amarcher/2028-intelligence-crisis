@@ -12,11 +12,10 @@ interface UseAuthResult {
 
 export function useAuth(): UseAuthResult {
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(supabase));
 
   useEffect(() => {
     if (!supabase) {
-      setLoading(false);
       return;
     }
 

@@ -14,13 +14,13 @@ interface UseSupabaseResult {
 
 export function useSupabase(seriesId: string, options?: UseSupabaseOptions): UseSupabaseResult {
   const [data, setData] = useState<DataPoint[] | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(() => Boolean(supabase));
+  const [error, setError] = useState<string | null>(() =>
+    supabase ? null : 'Supabase not configured',
+  );
 
   useEffect(() => {
     if (!supabase) {
-      setIsLoading(false);
-      setError('Supabase not configured');
       return;
     }
 
