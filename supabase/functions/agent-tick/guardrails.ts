@@ -105,7 +105,7 @@ function etTimeMinutes(now: Date): { minutes: number; weekday: string } {
   return { minutes: hour * 60 + minute, weekday };
 }
 
-function isInMarketHours(now: Date): boolean {
+export function isInMarketHours(now: Date): boolean {
   const { minutes, weekday } = etTimeMinutes(now);
   if (weekday === 'Sat' || weekday === 'Sun') return false;
   return minutes >= CAPS.marketOpenMinutes && minutes <= CAPS.marketCutoffMinutes;

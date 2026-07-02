@@ -21,11 +21,13 @@ import {
   alpacaFromEnv,
   cancelAllOrders,
   getAccount,
+  getLatestOptionQuotes,
   getOptionsChain,
   getPositions,
   placeOrder,
   type AlpacaCredentials,
   type AlpacaAccount,
+  type AlpacaOrder,
   type AlpacaPosition,
   type PlaceOrderParams,
 } from './alpaca.ts';
@@ -340,17 +342,14 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     // Client order ID for idempotency — digest_id + proposal index
     const clientOrderId = `${input.digestId.slice(0, 8)}-${i}`;
 
-    const orderParams: PlaceOrderParams = {
-      symbol,
-      qty,
-      side,
-      type: 'market',
-      time_in_force: 'day',
-      client_order_id: clientOrderId,
-    };
-
     try {
-      const orderRes = await placeOrder(creds, orderParams);
+      const { order: orderRes, orderType, limitPrice } = await placeSmartOrder(creds, {
+        symbol,
+        qty,
+        side,
+        isOption: optionSymbol != null,
+        clientOrderId,
+      });
       await input.supa.insertOrder({
         digest_id: input.digestId,
         ticker: p.ticker,
@@ -358,7 +357,8 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
         option_symbol: optionSymbol,
         side,
         qty,
-        order_type: 'market',
+        order_type: orderType,
+        limit_price: limitPrice,
         notional_usd: decision.notional,
         status: 'submitted',
         alpaca_order_id: orderRes.id,
@@ -420,6 +420,59 @@ export function sideFromAction(action: Proposal['action']): 'buy' | 'sell' {
   if (action === 'open' || action === 'add') return 'buy';
   // trim, close, roll (sell-side of the roll), unwind_all all reduce position
   return 'sell';
+}
+
+/** Option price increments: penny under $3.00, nickel above (safe for
+ *  non-penny-pilot classes; penny classes just get a slightly coarser limit). */
+function roundOptionPrice(price: number): number {
+  const tick = price < 3 ? 0.01 : 0.05;
+  return Math.max(tick, Math.round(price / tick) * tick);
+}
+
+/** Place an order as a MARKETABLE LIMIT when a quote is available — crosses
+ *  the spread deliberately (buy at ask+2%, sell at bid−2%) so fills are
+ *  near-certain but a wide or broken LEAPS quote can't fill 15% through fair
+ *  value the way a bare market order can. Falls back to a market order when
+ *  no quote resolves. Equities stay market orders (liquid ETF/large-cap
+ *  universe; spread damage lives in the options). */
+export async function placeSmartOrder(
+  creds: AlpacaCredentials,
+  opts: {
+    symbol: string;
+    qty: number;
+    side: 'buy' | 'sell';
+    isOption: boolean;
+    clientOrderId: string;
+  },
+): Promise<{ order: AlpacaOrder; orderType: 'market' | 'limit'; limitPrice: number | null }> {
+  let orderType: 'market' | 'limit' = 'market';
+  let limitPrice: number | null = null;
+
+  if (opts.isOption) {
+    try {
+      const quotes = await getLatestOptionQuotes(creds, [opts.symbol]);
+      const q = quotes.get(opts.symbol);
+      if (q && q.ask > 0 && (opts.side === 'buy' || q.bid > 0)) {
+        orderType = 'limit';
+        limitPrice = roundOptionPrice(opts.side === 'buy' ? q.ask * 1.02 : q.bid * 0.98);
+      }
+    } catch (e) {
+      console.warn(`option quote ${opts.symbol} failed — falling back to market:`, String(e).slice(0, 150));
+    }
+  }
+
+  const params: PlaceOrderParams = {
+    symbol: opts.symbol,
+    qty: opts.qty,
+    side: opts.side,
+    type: orderType,
+    time_in_force: 'day',
+    client_order_id: opts.clientOrderId,
+  };
+  if (orderType === 'limit' && limitPrice != null) params.limit_price = limitPrice;
+
+  const order = await placeOrder(creds, params);
+  return { order, orderType, limitPrice };
 }
 
 export type OrderPlan =
