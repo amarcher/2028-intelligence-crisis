@@ -118,7 +118,11 @@ export interface ExecutionOutcome {
   queued: number;
   rejected: number;
   errors: string[];
+  /** Drill runs only: the proposals that WOULD have gone to approval. */
+  planned?: Proposal[];
 }
+
+export type PlaybookLevel = 'fired_2' | 'fired_3';
 
 export interface ExecutionInput {
   digestId: string;
@@ -128,6 +132,12 @@ export interface ExecutionInput {
   killSwitchTriggered: boolean;
   supa: ExecutionSupabase;
   now?: Date;
+  /** Loads the pre-registered rotation steps for a crossed trigger level.
+   *  Attached ahead of the reasoner's proposals on phase-flip approvals. */
+  loadPlaybook?: (level: PlaybookLevel) => Promise<Proposal[]>;
+  /** Drill mode: build the approval content but write nothing, alert nothing,
+   *  trade nothing — return it in `planned` for inspection. */
+  dryRun?: boolean;
 }
 
 // ————— orchestration —————
@@ -166,23 +176,51 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
 
   const priorDigests = await input.supa.priorDigests(3);
   const priorFired = priorDigests.length > 0 ? priorDigests[0].fired_count : 0;
-  const phaseFlipped = priorFired < 2 && input.firedCountThisTick >= 2;
+  const crossed2 = priorFired < 2 && input.firedCountThisTick >= 2;
+  const crossed3 = priorFired < 3 && input.firedCountThisTick >= 3;
   const hasUnwindAll = input.proposals.some((p) => p.action === 'unwind_all');
 
-  if (phaseFlipped || hasUnwindAll || input.killSwitchTriggered) {
+  if (crossed2 || crossed3 || hasUnwindAll || input.killSwitchTriggered) {
     const kind: AgentApprovalRow['kind'] = input.killSwitchTriggered || hasUnwindAll
       ? 'unwind_all'
       : 'phase_flip';
     const rationale = input.killSwitchTriggered
-      ? `Kill-switch triggered at ${input.firedCountThisTick}/5 — agent proposes full unwind.`
-      : phaseFlipped
-        ? `Signal count crossed from ${priorFired}/5 to ${input.firedCountThisTick}/5 — agent proposes Phase-2 rotation.`
+      ? `Kill-switch triggered at ${input.firedCountThisTick}/6 — agent proposes full unwind.`
+      : crossed2 || crossed3
+        ? `Signal count crossed from ${priorFired}/6 to ${input.firedCountThisTick}/6 — pre-registered rotation attached; approve to execute it.`
         : `Agent emitted unwind_all action.`;
+
+    // Attach the pre-registered playbook ahead of the reasoner's proposals —
+    // the rotation was decided calmly in advance; the reasoner's ideas ride
+    // along as context, not as the plan.
+    let approvalProposals = input.proposals;
+    if (kind === 'phase_flip' && input.loadPlaybook) {
+      const steps: Proposal[] = [];
+      try {
+        if (crossed2) steps.push(...(await input.loadPlaybook('fired_2')));
+        if (crossed3) steps.push(...(await input.loadPlaybook('fired_3')));
+      } catch (e) {
+        errors.push(`playbook load failed: ${String(e).slice(0, 200)}`);
+      }
+      if (steps.length > 0) approvalProposals = [...steps, ...input.proposals];
+    }
+
+    if (input.dryRun) {
+      return {
+        mode: 'auto_execute',
+        phase: input.config.phase,
+        placed: 0,
+        queued: 0,
+        rejected: 0,
+        errors,
+        planned: approvalProposals,
+      };
+    }
 
     await input.supa.insertApproval({
       digest_id: input.digestId,
       kind,
-      proposals: input.proposals,
+      proposals: approvalProposals,
       rationale,
     });
 
@@ -191,7 +229,7 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     const alertRes = await sendApprovalAlert({
       kind,
       rationale,
-      proposals: input.proposals.map((p) => ({
+      proposals: approvalProposals.map((p) => ({
         action: p.action,
         ticker: p.ticker,
         instrument: p.instrument,

@@ -45,6 +45,7 @@ interface RuleRow {
   roll_alerted_at: string | null;
   archetype: string;
   force_close_date: string | null;
+  vix_harvested_at: string | null;
 }
 
 interface OccParts {
@@ -148,6 +149,25 @@ Deno.serve(async () => {
 
     const today = new Date().toISOString().slice(0, 10);
 
+    // Latest VIX close — powers the pre-registered panic profit ladder:
+    // crisis alpha dies by round trip, so the take-profit tier was decided
+    // now, calm: VIX ≥ 40 → bank 1/3 of any put at ≥ 2× entry (weekly
+    // throttle per position).
+    let vixLevel: number | null = null;
+    {
+      const { data: vixRow } = await supabase
+        .from('economic_data')
+        .select('value')
+        .eq('series_id', 'VIXCLS')
+        .order('date', { ascending: false })
+        .limit(1);
+      if (vixRow && vixRow.length > 0 && vixRow[0].value != null) {
+        vixLevel = Number(vixRow[0].value);
+      }
+    }
+    const VIX_HARVEST_LEVEL = 40;
+    const weekMsThrottle = 7 * 86_400_000;
+
     // Convexity floor bookkeeping: how many SaaS puts are alive?
     const saasPuts = options.filter((p) => {
       const occ = parseOcc(p.symbol);
@@ -204,6 +224,19 @@ Deno.serve(async () => {
         sellQty = Math.max(1, Math.floor(pos.qty / 3));
         why = `This option doubled (${priceMultiple.toFixed(1)}× entry) — selling a third to lock in the gain. The rest keeps riding.`;
         flags.tier1_done = true;
+        summary.ladder_sells++;
+      } else if (
+        vixLevel != null &&
+        vixLevel >= VIX_HARVEST_LEVEL &&
+        occ?.type === 'put' &&
+        priceMultiple >= 2 &&
+        (!rule.vix_harvested_at || Date.now() - Date.parse(rule.vix_harvested_at) > weekMsThrottle)
+      ) {
+        // Panic harvest: market fear is extreme and this put is deep in
+        // profit — bank a third while the panic pays top dollar for it.
+        sellQty = Math.max(1, Math.floor(pos.qty / 3));
+        why = `Market fear is extreme right now (fear index ${vixLevel.toFixed(0)}, above the ${VIX_HARVEST_LEVEL} line) and this put is worth ${priceMultiple.toFixed(1)}× what we paid — banking a third into the panic, as pre-planned. Panic prices don't last.`;
+        flags.vix_harvested_at = new Date().toISOString();
         summary.ladder_sells++;
       }
 

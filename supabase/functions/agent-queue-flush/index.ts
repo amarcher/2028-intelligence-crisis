@@ -19,7 +19,7 @@ import {
   getAccount,
   getPositions,
 } from '../agent-tick/alpaca.ts';
-import { validateTrade, type GuardrailContext, type PriorOrderSummary } from '../agent-tick/guardrails.ts';
+import { isInMarketHours, validateTrade, type GuardrailContext, type PriorOrderSummary } from '../agent-tick/guardrails.ts';
 import { buildOrderPlan, executeSpreadProposal, placeSmartOrder, sideFromAction } from '../agent-tick/execute.ts';
 import { reconcileOrders } from '../agent-tick/reconcile.ts';
 import { sendTradeAlert } from '../agent-tick/alerts.ts';
@@ -98,7 +98,6 @@ Deno.serve(async () => {
       .order('created_at', { ascending: true });
     if (queueErr) throw new Error(`load queued: ${queueErr.message}`);
     const queued = (queuedRaw ?? []) as QueuedOrderRow[];
-    if (queued.length === 0) return json({ ...summary, note: 'no queued orders' });
 
     const [account, positions, todayOrdersRaw] = await Promise.all([
       getAccount(creds),
@@ -282,6 +281,174 @@ Deno.serve(async () => {
           .eq('id', row.id);
         summary.rejected++;
         summary.errors.push(`placeOrder ${p.ticker}: ${msg}`);
+      }
+    }
+
+    // ————— execute approved approvals (M4) —————
+    // The dashboard marks approvals approved; until now NOTHING executed
+    // them — the Phase-2 rotation would have been approved and then silently
+    // never traded. Executes only in market hours; retried by the intraday
+    // cron until done or expired.
+    if (isInMarketHours(new Date())) {
+      const { data: approvals } = await supabase
+        .from('agent_approvals')
+        .select('id, kind, proposals, digest_id')
+        .eq('status', 'approved')
+        .eq('executed', false)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: true })
+        .limit(3);
+
+      for (const approval of approvals ?? []) {
+        const executedActions: string[] = [];
+        try {
+          if (approval.kind === 'unwind_all') {
+            // Full liquidation: sell every position, options first (they
+            // decay), then equities. Sleeve before slow book is moot at
+            // full-unwind scope — everything goes.
+            const livePositions = await getPositions(creds);
+            const ordered = [...livePositions].sort((a, b) =>
+              a.asset_class === 'us_option' && b.asset_class !== 'us_option' ? -1 : 1,
+            );
+            for (const pos of ordered) {
+              if (pos.qty === 0) continue;
+              try {
+                const { order } = await placeSmartOrder(creds, {
+                  symbol: pos.symbol,
+                  qty: Math.abs(pos.qty),
+                  side: pos.qty > 0 ? 'sell' : 'buy',
+                  isOption: pos.asset_class === 'us_option',
+                  clientOrderId: `unwind-${approval.id.slice(0, 8)}-${pos.symbol.slice(-8)}`,
+                });
+                await supabase.from('agent_orders').insert({
+                  digest_id: approval.digest_id,
+                  approval_id: approval.id,
+                  ticker: pos.asset_class === 'us_option'
+                    ? (pos.symbol.match(/^([A-Z]{1,6})/)?.[1] ?? pos.symbol)
+                    : pos.symbol,
+                  instrument: pos.asset_class === 'us_option' ? 'put' : 'equity',
+                  option_symbol: pos.asset_class === 'us_option' ? pos.symbol : null,
+                  side: pos.qty > 0 ? 'sell' : 'buy',
+                  qty: Math.abs(pos.qty),
+                  order_type: 'market',
+                  notional_usd: Math.abs(pos.market_value),
+                  status: 'submitted',
+                  alpaca_order_id: order.id,
+                  submitted_at: order.submitted_at,
+                  raw_alpaca: order,
+                });
+                executedActions.push(`close ${pos.symbol}`);
+              } catch (e) {
+                summary.errors.push(`unwind ${pos.symbol}: ${String(e).slice(0, 120)}`);
+              }
+            }
+          } else {
+            // phase_flip / oversize_ticket: run each proposal through the
+            // normal guardrail + placement path.
+            const proposals = (approval.proposals ?? []) as Proposal[];
+            for (let i = 0; i < proposals.length; i++) {
+              const p = proposals[i];
+              if (p.action === 'hold' || p.action === 'unwind_all') continue;
+              const ctx: GuardrailContext = {
+                config: {
+                  halted: false,
+                  halt_reason: null,
+                  phase: config.phase,
+                  paper_mode: config.paper_mode !== false,
+                },
+                account,
+                positions,
+                todayOrders: allToday,
+                now: new Date(),
+              };
+              const decision = validateTrade(p, ctx);
+              if (decision.outcome !== 'approved') {
+                summary.errors.push(
+                  `approval ${approval.id.slice(0, 8)} step ${i + 1} (${p.ticker}): ${decision.outcome}${'reason' in decision ? ` — ${decision.reason}` : ''}`,
+                );
+                continue;
+              }
+              try {
+                if (p.instrument === 'put_spread' || p.instrument === 'call_spread') {
+                  const res = await executeSpreadProposal(
+                    creds, p, decision.notional, positions, `appr-${approval.id.slice(0, 8)}-${i}`,
+                  );
+                  if (!res.ok) {
+                    summary.errors.push(`approval spread ${p.ticker}: ${res.reason}`);
+                    continue;
+                  }
+                  await supabase.from('agent_orders').insert({
+                    digest_id: approval.digest_id,
+                    approval_id: approval.id,
+                    ticker: p.ticker,
+                    instrument: p.instrument,
+                    option_symbol: res.longSymbol,
+                    side: sideFromAction(p.action),
+                    qty: res.qty,
+                    order_type: 'limit',
+                    limit_price: res.limitPrice,
+                    notional_usd: decision.notional,
+                    status: 'submitted',
+                    alpaca_order_id: res.order.id,
+                    submitted_at: res.order.submitted_at,
+                    raw_alpaca: res.order,
+                  });
+                  executedActions.push(`${p.action} ${p.ticker} spread`);
+                } else {
+                  const plan = await buildOrderPlan(creds, p, decision.notional, positions);
+                  if (!plan.ok) {
+                    summary.errors.push(`approval plan ${p.ticker}: ${plan.reason}`);
+                    continue;
+                  }
+                  const { order, orderType, limitPrice } = await placeSmartOrder(creds, {
+                    symbol: plan.symbol,
+                    qty: plan.qty,
+                    side: sideFromAction(p.action),
+                    isOption: plan.optionSymbol != null,
+                    clientOrderId: `appr-${approval.id.slice(0, 8)}-${i}`,
+                  });
+                  await supabase.from('agent_orders').insert({
+                    digest_id: approval.digest_id,
+                    approval_id: approval.id,
+                    ticker: p.ticker,
+                    instrument: p.instrument,
+                    option_symbol: plan.optionSymbol,
+                    side: sideFromAction(p.action),
+                    qty: plan.qty,
+                    order_type: orderType,
+                    limit_price: limitPrice,
+                    notional_usd: decision.notional,
+                    status: 'submitted',
+                    alpaca_order_id: order.id,
+                    submitted_at: order.submitted_at,
+                    raw_alpaca: order,
+                  });
+                  executedActions.push(`${p.action} ${p.ticker}`);
+                }
+              } catch (e) {
+                summary.errors.push(`approval exec ${p.ticker}: ${String(e).slice(0, 150)}`);
+              }
+            }
+          }
+        } finally {
+          await supabase
+            .from('agent_approvals')
+            .update({ executed: true })
+            .eq('id', approval.id);
+        }
+        summary.placed += executedActions.length;
+        if (executedActions.length > 0) {
+          await sendTradeAlert({
+            action: approval.kind === 'unwind_all' ? 'close' : 'open',
+            side: 'sell',
+            ticker: 'PORTFOLIO',
+            instrument: 'equity',
+            qty: executedActions.length,
+            notional_usd: null,
+            rationale: `Your approval went through — the agent executed ${executedActions.length} step${executedActions.length === 1 ? '' : 's'}: ${executedActions.join(', ')}.`,
+            exit_condition: 'Each new position is managed by the automatic exit rules.',
+          });
+        }
       }
     }
 

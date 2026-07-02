@@ -99,6 +99,45 @@ import type { AlpacaPosition } from './alpaca.ts';
 
 interface TickRequest {
   tick_type?: TickType;
+  /** Drill mode: run the full reason→rotate pipeline against synthetic
+   *  trigger states WITHOUT persisting anything or placing any order.
+   *  Verifies the Phase-2 playbook end-to-end before it's needed for real. */
+  drill?: 'fired_2' | 'fired_3' | 'kill_switch';
+}
+
+const DRILL_LEVELS = new Set(['fired_2', 'fired_3', 'kill_switch']);
+
+/** Force a synthetic trigger state for drills: marks saas → sp500 → claims
+ *  as fired (in that order) until the target count is reached. */
+function applyDrill(
+  result: ReturnType<typeof computeSignals>,
+  level: 'fired_2' | 'fired_3' | 'kill_switch',
+): { res: ReturnType<typeof computeSignals>; kill: boolean } {
+  if (level === 'kill_switch') return { res: result, kill: true };
+  const target = level === 'fired_2' ? 2 : 3;
+  const priority = ['saas', 'sp500', 'claims', 'credit'];
+  const signals = result.signals.map((s) => ({ ...s }));
+  let fired = signals.filter((s) => s.state === 'fired').length;
+  for (const key of priority) {
+    if (fired >= target) break;
+    const s = signals.find((x) => x.key === key && x.state !== 'fired');
+    if (s) {
+      s.state = 'fired';
+      s.reading = `${s.reading} [DRILL: forced]`;
+      fired++;
+    }
+  }
+  return {
+    res: {
+      ...result,
+      signals,
+      firedCount: fired,
+      phase: fired >= 2 ? 'inflection' : result.phase,
+      phaseLabel: fired >= 2 ? 'PHASE 2 · ACTION' : result.phaseLabel,
+      verdict: fired >= 4 ? 'confirmed' : fired >= 2 ? 'trending' : result.verdict,
+    },
+    kill: false,
+  };
 }
 
 const FRED = {
@@ -293,6 +332,61 @@ Deno.serve(async (req: Request) => {
       loadNewsPulse(supabase),
     ]);
 
+    // ————— drill mode (M4): synthetic triggers, zero persistence, no orders —————
+    if (body.drill && DRILL_LEVELS.has(body.drill)) {
+      const { res: drillSignals, kill } = applyDrill(result, body.drill);
+      const reasoned = await runReasoner({
+        tickType,
+        signals: drillSignals,
+        drift,
+        recentDigests,
+        account: accountSummary,
+        positions: positionSummaries,
+        shippingPulse,
+        tapeQuotes,
+        optionChains,
+        activeSleeve,
+        recentOrders,
+        earnings,
+        newsPulse,
+      });
+      const tapeForPlaybook = new Map((tapeQuotes ?? []).map((t) => [t.ticker, t.price] as const));
+      const drillExec = await orchestrateExecution({
+        digestId: '00000000-0000-0000-0000-000000000000',
+        config: {
+          halted: Boolean(config.halted),
+          halt_reason: null,
+          phase: (config.phase ?? 'paper') as 'shadow' | 'paper' | 'small_live' | 'scale',
+          paper_mode: config.paper_mode !== false,
+        },
+        proposals: reasoned.proposals,
+        firedCountThisTick: drillSignals.firedCount,
+        killSwitchTriggered: kill || reasoned.kill_switch_triggered,
+        supa: buildExecutionSupa(supabase),
+        loadPlaybook: (level) => buildPlaybookProposals(supabase, level, tapeForPlaybook),
+        dryRun: true,
+      });
+      await deliverDigest({
+        tick_type: tickType,
+        phase: drillSignals.phase,
+        fired_count: drillSignals.firedCount,
+        kill_switch_triggered: kill || reasoned.kill_switch_triggered,
+        narrative: `🧪 [DRILL — no orders were placed, nothing was saved] ${reasoned.narrative}`,
+        proposals: drillExec.planned ?? reasoned.proposals,
+        drift_notes: reasoned.drift_notes,
+        active_sleeve: activeSleeve ?? null,
+        reasoner_status: reasoned.status,
+      });
+      return json({
+        ok: true,
+        drill: body.drill,
+        fired_count: drillSignals.firedCount,
+        kill_switch_triggered: kill || reasoned.kill_switch_triggered,
+        planned: drillExec.planned ?? [],
+        narrative: reasoned.narrative,
+      });
+    }
+
     // Snapshot lands regardless of whether the reasoner succeeds.
     const { data: snapshot, error: snapError } = await supabase
       .from('agent_snapshots')
@@ -423,6 +517,7 @@ Deno.serve(async (req: Request) => {
     let execution = null;
     if (config.mode === 'auto_execute' && execPhase !== 'shadow') {
       const supa = buildExecutionSupa(supabase);
+      const tapeForPlaybook = new Map((tapeQuotes ?? []).map((t) => [t.ticker, t.price] as const));
       execution = await orchestrateExecution({
         digestId: insertedDigest.id,
         config: execConfig,
@@ -430,6 +525,7 @@ Deno.serve(async (req: Request) => {
         firedCountThisTick: result.firedCount,
         killSwitchTriggered: Boolean(digestRow.kill_switch_triggered),
         supa,
+        loadPlaybook: (level) => buildPlaybookProposals(supabase, level, tapeForPlaybook),
       });
     }
 
@@ -906,6 +1002,85 @@ function buildActiveSleeveSummary(input: {
     },
     currentSleeve,
   };
+}
+
+// ————— playbook (M4) —————
+
+interface PlaybookRow {
+  trigger_level: string;
+  step_order: number;
+  action: 'open' | 'add' | 'trim' | 'close';
+  ticker: string;
+  instrument: Proposal['instrument'];
+  expiry_months: number | null;
+  strike_pct_otm: number | null;
+  strike_short_pct_otm: number | null;
+  size_hint: Proposal['size_hint'];
+  rationale: string;
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function monthsOut(n: number): string {
+  const d = new Date();
+  d.setUTCMonth(d.getUTCMonth() + n);
+  return `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+function roundStrike(v: number): number {
+  return v >= 100 ? Math.round(v / 5) * 5 : Math.round(v);
+}
+
+/** Convert a trigger level's pre-registered playbook rows into concrete
+ *  proposals: expiries mapped to real months, strikes anchored to live tape.
+ *  Option steps with no tape for the underlying are skipped (logged). */
+async function buildPlaybookProposals(
+  supabase: ReturnType<typeof createClient>,
+  level: 'fired_2' | 'fired_3',
+  tapeByTicker: Map<string, number>,
+): Promise<Proposal[]> {
+  const { data, error } = await supabase
+    .from('playbooks')
+    .select('*')
+    .eq('trigger_level', level)
+    .eq('enabled', true)
+    .order('step_order', { ascending: true });
+  if (error) throw new Error(`playbooks load: ${error.message}`);
+
+  const out: Proposal[] = [];
+  for (const row of (data ?? []) as PlaybookRow[]) {
+    const isOption = row.instrument !== 'equity';
+    const needsStrike = isOption && (row.action === 'open' || row.action === 'add');
+    let strike: number | null = null;
+    let strikeShort: number | null = null;
+    if (needsStrike) {
+      const spot = tapeByTicker.get(row.ticker);
+      if (!spot || row.strike_pct_otm == null) {
+        console.warn(`playbook ${level}#${row.step_order}: no tape/strike pct for ${row.ticker} — skipped`);
+        continue;
+      }
+      strike = roundStrike(spot * (1 - row.strike_pct_otm / 100));
+      if (row.strike_short_pct_otm != null) {
+        strikeShort = roundStrike(spot * (1 - row.strike_short_pct_otm / 100));
+      }
+    }
+    out.push({
+      action: row.action,
+      ticker: row.ticker,
+      instrument: row.instrument,
+      expiry: needsStrike && row.expiry_months != null ? monthsOut(row.expiry_months) : null,
+      strike,
+      strike_short: strikeShort,
+      archetype: 'core',
+      time_stop: null,
+      size_hint: row.size_hint,
+      rationale: `[Pre-planned rotation] ${row.rationale}`,
+      exit_condition:
+        'Managed by the rotation plan and the automatic exit rules (stop-loss, profit tiers).',
+      urgency: 'act_today',
+    });
+  }
+  return out;
 }
 
 /** Net delta-adjusted directional exposure in USD: equities at market value
