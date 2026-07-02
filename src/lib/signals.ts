@@ -116,7 +116,11 @@ export function evalSaas(data: SaaSDataPoint[]) {
 }
 
 export function evalSp500(data: DataPoint[]) {
-  // Hit 7,500+ and failed to make a new high in 2+ monthly prints.
+  // Hit 7,500+ and failed to make a new high for 2+ calendar months.
+  // Measured in DAYS between the peak print's date and the latest print's
+  // date — NOT in array positions. The series cadence has changed over time
+  // (weekly → daily), and counting prints once fired this trigger three weeks
+  // after an all-time high because three weekly prints looked like "3 months".
   const nonNull = data.filter((d) => d.value != null) as Array<{ date: string; value: number }>;
   if (nonNull.length === 0) return { fired: false, reading: '—' };
   let maxIdx = 0;
@@ -125,9 +129,13 @@ export function evalSp500(data: DataPoint[]) {
   }
   const peak = nonNull[maxIdx].value;
   const latest = nonNull[nonNull.length - 1].value;
-  const monthsSincePeak = nonNull.length - 1 - maxIdx;
-  const fired = peak >= 7500 && monthsSincePeak >= 2 && latest < peak;
-  return { fired, reading: `peak ${Math.round(peak)} · now ${Math.round(latest)}` };
+  const daysSincePeak =
+    (Date.parse(nonNull[nonNull.length - 1].date) - Date.parse(nonNull[maxIdx].date)) / 86_400_000;
+  const fired = peak >= 7500 && daysSincePeak >= 60 && latest < peak;
+  return {
+    fired,
+    reading: `peak ${Math.round(peak)} (${nonNull[maxIdx].date.slice(0, 10)}) · now ${Math.round(latest)}`,
+  };
 }
 
 export function evalHousing(data: DataPoint[]) {

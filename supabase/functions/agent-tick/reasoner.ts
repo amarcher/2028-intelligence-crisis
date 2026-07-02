@@ -138,11 +138,27 @@ export interface ActiveSleeveSummary {
   } | null;
 }
 
+export interface RecentOrderOutcome {
+  created_at: string;
+  ticker: string;
+  instrument: string;
+  option_symbol?: string | null;
+  side: 'buy' | 'sell';
+  status: string;
+  notional_usd: number | null;
+  filled_avg_price: number | null;
+  rejection_reason: string | null;
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
   drift: DriftSummary;
   recentDigests: RecentDigest[];
+  /** Last-48h agent_orders outcomes: filled / queued-for-open / rejected and
+   *  why. Lets the reasoner avoid re-proposing what's already in flight and
+   *  learn the guardrails instead of bouncing off them blind. */
+  recentOrders?: RecentOrderOutcome[];
   /** Live account state. Present when mode=auto_execute + phase != shadow +
    *  Alpaca creds available. Absent in signal-only / shadow. */
   account?: AccountSummary;
@@ -299,7 +315,9 @@ These are the dashboard's primary triggers. At least two must fire to move from 
 ## Phase policy
 
 **Phase 1 · Counterfactual Grind** (0–1 signals fired):
-Keep the slow setup. Hold long-dated SaaS puts on NOW/CRM/HUBS/WDAY/DDOG, Jan 2027 and Jan 2028 expiries, 20–30% below today's stock price. Carry TLT + GLD + XLP as safe-haven positions. Small QQQ/SMH/selected AI longs are allowed while knowledge work and AI infrastructure remain bid. Do not deploy broad market or credit shorts yet.
+Keep the slow setup. Hold long-dated SaaS puts on NOW/CRM/HUBS/WDAY (seat-based software), Jan 2027 and Jan 2028 expiries, 20–30% below today's stock price. Carry TLT + GLD + XLP as safe-haven positions. Small QQQ/SMH/selected AI longs are allowed while knowledge work and AI infrastructure remain bid. Do not deploy broad market or credit shorts yet.
+
+**DDOG is NOT a SaaS short.** Datadog is usage-based AI-infrastructure whose revenue is accelerating — it sits on the AI-winners side of the modified prediction. Never propose new DDOG puts. If the account still holds DDOG puts from before this rule, closing them is good position hygiene (say why in plain English: "Datadog is growing faster, not slower — this bet was on the wrong side").
 
 Modified-thesis active sleeve in Phase 1:
 - The active sleeve can add or rotate small SaaS put exposure before the macro phase flips, but only when the "Modified-thesis active sleeve" block says stance = probe or press.
@@ -386,13 +404,22 @@ How to use them:
 
 Cite shipping evidence in at most one sentence of drift_notes or narrative. Never emit a proposal whose rationale starts with shipping — shipping corroborates drift, it doesn't drive trades. Exception: if 3+ shipping readings all say "counterfactual" for multiple weeks in a row while Phase-Flip signals still show 0 fired, that's a valid reason to trim existing asymmetric exposure further.
 
+## Order lifecycle — how your proposals become trades
+
+Clean proposals emitted while the market is closed (premarket and Monday-morning ticks) are QUEUED and placed automatically shortly after 9:30 ET — they are not lost. The user message includes a "Recent order outcomes" section:
+
+- **QUEUED** — already accepted, waiting for the open. Do NOT re-propose the same trade; it would double the position.
+- **SUBMITTED / FILLED** — the trade went through (FILLED shows the actual price). Treat it as part of the book.
+- **REJECTED** — code guardrails blocked it; the reason is shown. Adjust the proposal to satisfy the constraint (smaller size, different name) or drop the idea. Do not resubmit the identical proposal.
+- **EXPIRED** — a queued order aged out unfilled. You may re-propose it if the evidence still supports it.
+
 ## Memory + ground truth
 
 You receive the last 3 digests (or 8 on weekly ticks) plus — when the agent is running in auto_execute mode — the LIVE account state (equity, cash, current positions). **Always prefer ground truth over memory.** Your prior digests may describe a LEAPS book that doesn't exist yet. Check the "Current positions" section of the user message before saying "hold".
 
 **Empty-book case.** If the user message says \`Current positions: (none — cash-only account)\`, the Phase 1 book does NOT exist yet and must be OPENED, not held. Emit starter \`open\` proposals for the Phase 1 starter book:
 
-- SaaS LEAPS puts (Jan 2027, 20–30% OTM) on 3–5 of: NOW, CRM, HUBS, WDAY, DDOG — starter size each. Emit a concrete numeric \`strike\` on each (round to a standard chain increment, e.g. $5 or $10).
+- SaaS LEAPS puts (Jan 2027, 20–30% OTM) on 3–4 of: NOW, CRM, HUBS, WDAY — starter size each. Emit a concrete numeric \`strike\` on each (round to a standard chain increment, e.g. $5 or $10).
 - Defensive equity: TLT, GLD, XLP — starter size each
 - Small AI-bubble equity: QQQ or NVDA — starter size
 
@@ -557,6 +584,19 @@ function renderRecentDigests(recent: RecentDigest[]): string {
     .join('\n');
 }
 
+function renderRecentOrders(orders: RecentOrderOutcome[] | undefined): string {
+  if (!orders || orders.length === 0) return '(no orders in the last 48 hours)';
+  return orders
+    .map((o) => {
+      const label = o.option_symbol || o.ticker;
+      const size = o.notional_usd != null ? ` ~$${Math.round(o.notional_usd)}` : '';
+      const fill = o.filled_avg_price != null ? ` @ $${o.filled_avg_price}` : '';
+      const why = o.rejection_reason ? ` — ${o.rejection_reason.slice(0, 140)}` : '';
+      return `  - ${o.created_at.slice(0, 16).replace('T', ' ')}Z ${o.side.toUpperCase()} ${label} ${o.instrument}${size} → ${o.status.toUpperCase()}${fill}${why}`;
+    })
+    .join('\n');
+}
+
 function renderAccount(a: AccountSummary | undefined): string {
   if (!a) return '(running in signal-only mode — no brokerage account state)';
   return `equity $${a.equity.toFixed(0)} · cash $${a.cash.toFixed(0)} · buying power $${a.buying_power.toFixed(0)}`;
@@ -703,6 +743,9 @@ ${renderShippingPulse(shippingPulse)}
 
 Modified-thesis active sleeve (fast layer — SaaS-vs-AI, does not trigger Action phase):
 ${renderActiveSleeve(activeSleeve)}
+
+Recent order outcomes (last 48h — QUEUED means waiting for the market open; do not re-propose it):
+${renderRecentOrders(input.recentOrders)}
 
 Recent digests (most-recent first):
 ${renderRecentDigests(recentDigests)}

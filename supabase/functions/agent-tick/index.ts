@@ -18,12 +18,14 @@ import {
   type PositionSummary,
   type Proposal,
   type RecentDigest,
+  type RecentOrderOutcome,
   type ShippingPulseSummary,
   type ShippingReading,
   type TapeReading,
   type TickType,
   type WowSummary,
 } from './reasoner.ts';
+import { reconcileOrders } from './reconcile.ts';
 import {
   alpacaFromEnv,
   getAccount,
@@ -40,12 +42,14 @@ import { WHITELIST } from './filter.ts';
 // SaaS short underliers we pre-fetch a Jan 2027 put chain for on each tick so
 // the reasoner picks strikes from real listings instead of guessing. Must be
 // a subset of WHITELIST; keep small — one chain call per ticker per tick.
+// DDOG is deliberately absent: it's usage-based AI-infrastructure that is
+// ACCELERATING (+32% y/y as of Q1 26) — it belongs on the AI-winners side of
+// the modified thesis, not in the seat-based SaaS short set.
 const LEAPS_UNIVERSE: ReadonlyArray<{ ticker: string; expiry: string; expiryIso: [string, string]; type: 'put' | 'call' }> = [
   { ticker: 'NOW',  expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
   { ticker: 'CRM',  expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
   { ticker: 'HUBS', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
   { ticker: 'WDAY', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
-  { ticker: 'DDOG', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
   { ticker: 'FRSH', expiry: 'Jan 2027', expiryIso: ['2027-01-01', '2027-01-31'], type: 'put' },
 ];
 
@@ -111,8 +115,12 @@ const SAAS_SERIES: Array<{ id: string; field: keyof Omit<SaaSDataPoint, 'date'> 
   { id: 'saas_DDOG', field: 'datadog' },
 ];
 
-const SAAS_TICKERS = ['NOW', 'CRM', 'HUBS', 'WDAY', 'DDOG', 'FRSH'] as const;
-const AI_WINNER_TICKERS = ['QQQ', 'SMH', 'IGV', 'NVDA', 'AVGO', 'MSFT', 'GOOGL', 'META'] as const;
+// Seat-based SaaS shorts vs AI/knowledge-work winners. DDOG moved from the
+// SaaS set to the winners set (usage-based observability, revenue
+// accelerating) — its data series still ingests, but it no longer counts in
+// the SaaS momentum basket, revenue trend, or put universe.
+const SAAS_TICKERS = ['NOW', 'CRM', 'HUBS', 'WDAY', 'FRSH'] as const;
+const AI_WINNER_TICKERS = ['QQQ', 'SMH', 'IGV', 'NVDA', 'AVGO', 'MSFT', 'GOOGL', 'META', 'DDOG'] as const;
 const CREDIT_STRESS_TICKERS = ['HYG', 'KRE', 'IYR'] as const;
 const DEFENSIVE_TICKERS = new Set(['TLT', 'GLD', 'IAU', 'XLP', 'KO', 'PG', 'COST', 'WMT']);
 const ACTIVE_BAR_UNIVERSE = [
@@ -182,6 +190,16 @@ Deno.serve(async (req: Request) => {
       try {
         const paperMode = config.paper_mode !== false;
         const creds = alpacaFromEnv(paperMode);
+        // Reconcile fills FIRST so this tick reasons over real order outcomes
+        // (and backfills terminal states for historical 'submitted' rows).
+        try {
+          const rec = await reconcileOrders(supabase, creds);
+          if (rec.updated > 0 || rec.errors.length > 0) {
+            console.log('reconcile:', JSON.stringify(rec));
+          }
+        } catch (e) {
+          console.warn('reconcileOrders failed (non-fatal):', String(e).slice(0, 200));
+        }
         const [acct, pos, tape] = await Promise.all([
           getAccount(creds),
           getPositions(creds),
@@ -228,10 +246,29 @@ Deno.serve(async (req: Request) => {
           bars,
           drift,
         });
+
+        // ————— measurement layer (M0) —————
+        // Equity snapshot + meta indices land every tick with account state.
+        // Best-effort: a failed insert must never block the digest.
+        await writeMeasurement(supabase, {
+          tickType,
+          account: acct,
+          positions: pos,
+          activeSleeve,
+          tape,
+          firedCount: result.firedCount,
+        }).catch((e) =>
+          console.warn('writeMeasurement failed (non-fatal):', String(e).slice(0, 200)),
+        );
       } catch (e) {
         console.warn('Alpaca state load failed (non-fatal):', String(e).slice(0, 200));
       }
     }
+
+    // Recent order outcomes (last 48h) — lets the reasoner see what happened
+    // to its prior proposals (filled / queued for open / rejected and why)
+    // instead of re-proposing blind.
+    const recentOrders = await loadRecentOrders(supabase);
 
     // Snapshot lands regardless of whether the reasoner succeeds.
     const { data: snapshot, error: snapError } = await supabase
@@ -271,6 +308,7 @@ Deno.serve(async (req: Request) => {
         tapeQuotes,
         optionChains,
         activeSleeve,
+        recentOrders,
       });
 
       digestRow = {
@@ -539,8 +577,22 @@ function mergeSaasSeries(seriesArrays: DataPoint[][]): SaaSDataPoint[] {
 function weekOverWeek(data: DataPoint[]): WowSummary {
   const nonNull = data.filter((d) => d.value != null);
   if (nonNull.length === 0) return { last: null, wow_delta: null, wow_pct: null };
-  const last = nonNull[nonNull.length - 1].value!;
-  const prior = nonNull[nonNull.length - 2]?.value ?? null;
+  const lastPoint = nonNull[nonNull.length - 1];
+  const last = lastPoint.value!;
+  // Date-aware lookback: the comparison print is the most recent one at
+  // least 6 days older than the latest. For monthly/weekly series that's the
+  // previous print (unchanged behavior); for daily series (SP500, VIX since
+  // the daily-ingest fix) it's ~a week back instead of yesterday, keeping
+  // "week-over-week" honest.
+  const cutoff = Date.parse(lastPoint.date) - 6 * 86_400_000;
+  let prior: number | null = null;
+  for (let i = nonNull.length - 2; i >= 0; i--) {
+    if (Date.parse(nonNull[i].date) <= cutoff) {
+      prior = nonNull[i].value!;
+      break;
+    }
+  }
+  if (prior == null) prior = nonNull[nonNull.length - 2]?.value ?? null;
   if (prior == null) return { last, wow_delta: null, wow_pct: null };
   return {
     last,
@@ -554,7 +606,6 @@ const SAAS_FIELD_BY_TICKER: Record<(typeof SAAS_TICKERS)[number], keyof Omit<Saa
   CRM: 'salesforce',
   HUBS: 'hubspot',
   WDAY: 'workday',
-  DDOG: 'datadog',
   FRSH: 'freshworks',
 };
 
@@ -736,6 +787,90 @@ function buildActiveSleeveSummary(input: {
     },
     currentSleeve,
   };
+}
+
+// ————— measurement layer (M0) —————
+
+interface MeasurementInput {
+  tickType: TickType;
+  account: AlpacaAccount;
+  positions: AlpacaPosition[];
+  activeSleeve: ActiveSleeveSummary;
+  tape: TapeReading[];
+  firedCount: number;
+}
+
+/** Persist the per-tick equity snapshot + meta indices. These two tables are
+ *  the system's memory of its own performance — without them no Sharpe,
+ *  drawdown, alpha-vs-benchmark, or stance history is computable. */
+async function writeMeasurement(
+  supabase: ReturnType<typeof createClient>,
+  input: MeasurementInput,
+): Promise<void> {
+  const { account, positions, activeSleeve, tape, tickType, firedCount } = input;
+  const tapeBy = new Map(tape.map((t) => [t.ticker, t.price] as const));
+  const sleeve = activeSleeve.currentSleeve;
+  const risk = activeSleeve.riskBudget;
+  const unrealized = positions.reduce((s, p) => s + p.unrealized_pl, 0);
+
+  const { error: eqErr } = await supabase.from('agent_equity_snapshots').insert({
+    tick_type: tickType,
+    equity: account.equity,
+    cash: account.cash,
+    buying_power: account.buying_power,
+    unrealized_pl: unrealized,
+    saas_put_value: sleeve?.saasPutValue ?? null,
+    ai_long_value: sleeve?.aiLongValue ?? null,
+    defensive_value: sleeve?.defensiveValue ?? null,
+    gross_exposure: risk?.grossExposureValue ?? null,
+    spy_close: tapeBy.get('SPY') ?? null,
+    qqq_close: tapeBy.get('QQQ') ?? null,
+    igv_close: tapeBy.get('IGV') ?? null,
+  });
+  if (eqErr) console.warn(`equity snapshot insert failed: ${eqErr.message}`);
+
+  const rows: Array<{ key: string; value: number; detail?: unknown }> = [
+    {
+      key: 'tai',
+      value: activeSleeve.score,
+      detail: { stance: activeSleeve.stance, reasons: activeSleeve.reasons },
+    },
+    { key: 'fired_count', value: firedCount },
+  ];
+  const m = activeSleeve.momentum;
+  if (m.saasVsAi20d != null) rows.push({ key: 'saas_vs_ai_20d', value: m.saasVsAi20d });
+  if (m.creditStress20d != null) rows.push({ key: 'credit_stress_20d', value: m.creditStress20d });
+  if (sleeve && sleeve.aiLongValue + sleeve.defensiveValue > 0) {
+    rows.push({
+      key: 'positioning_ratio',
+      value: sleeve.saasPutValue / (sleeve.aiLongValue + sleeve.defensiveValue),
+    });
+  }
+  if (risk) rows.push({ key: 'gross_exposure_pct', value: risk.grossExposurePct });
+  // Regime disagreement: fast-layer conviction vs slow-macro confirmation.
+  // High = market pricing the thesis before the macro readings confirm it.
+  rows.push({ key: 'regime_disagreement', value: Math.abs(activeSleeve.score - firedCount * 20) });
+
+  const { error: miErr } = await supabase.from('meta_indices').insert(rows);
+  if (miErr) console.warn(`meta_indices insert failed: ${miErr.message}`);
+}
+
+/** Last-48h order outcomes for the reasoner's context window. */
+async function loadRecentOrders(
+  supabase: ReturnType<typeof createClient>,
+): Promise<RecentOrderOutcome[]> {
+  const since = new Date(Date.now() - 48 * 3_600_000).toISOString();
+  const { data, error } = await supabase
+    .from('agent_orders')
+    .select('created_at, ticker, instrument, option_symbol, side, status, notional_usd, filled_avg_price, rejection_reason')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(12);
+  if (error) {
+    console.warn(`loadRecentOrders failed (non-fatal): ${error.message}`);
+    return [];
+  }
+  return (data ?? []) as RecentOrderOutcome[];
 }
 
 async function incrementDeadman(

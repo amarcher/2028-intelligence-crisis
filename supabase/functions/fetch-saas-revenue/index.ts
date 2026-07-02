@@ -40,16 +40,22 @@ interface EdgarConceptResponse {
   };
 }
 
-function fpToQuarterDate(fy: number, fp: string): string | null {
-  const quarterMap: Record<string, string> = {
-    Q1: '01',
-    Q2: '04',
-    Q3: '07',
-    Q4: '10',
-  };
-  const month = quarterMap[fp];
-  if (!month) return null;
-  return `${fy}-${month}-01`;
+/** Calendar-true date for a quarter: first day of the month the quarter
+ *  ENDED in, from the XBRL `end` field. The previous approach mapped fiscal
+ *  (fy, fp) straight to a calendar date, which mislabeled every company with
+ *  an offset fiscal year — Salesforce's FY2027 Q1 (calendar Feb–Apr 2026)
+ *  landed as a future-dated "2027-01-01" row. */
+function quarterEndDate(u: EdgarUnit): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(u.end)) return null;
+  return `${u.end.slice(0, 7)}-01`;
+}
+
+/** True quarterly durations only — EDGAR also returns YTD (6/9-month) and
+ *  annual durations under the same tags. */
+function isQuarterDuration(u: EdgarUnit): boolean {
+  if (!u.start) return false;
+  const days = (Date.parse(u.end) - Date.parse(u.start)) / 86_400_000;
+  return days >= 80 && days <= 100;
 }
 
 Deno.serve(async () => {
@@ -84,36 +90,33 @@ Deno.serve(async () => {
         continue;
       }
 
-      // Filter to quarterly filings only (10-Q and 10-K for Q4)
-      // and deduplicate by (fy, fp) keeping the most recently filed
-      const quarterMap = new Map<string, EdgarUnit>();
+      // Keep true ~3-month durations only, deduplicated by the calendar month
+      // the quarter ended in (most recently filed wins). Keying by calendar
+      // end month — not (fy, fp) — makes YoY comparison correct for offset
+      // fiscal years, and fixes a bug where the YoY lookup referenced an
+      // out-of-scope variable and threw on every run (which is why WDAY/DDOG
+      // had no data at all and NOW was months stale).
+      const byEndMonth = new Map<string, EdgarUnit>();
       for (const u of units) {
-        if (!['Q1', 'Q2', 'Q3', 'Q4'].includes(u.fp)) continue;
-        // Only include entries with a start date (duration concepts = revenue)
-        if (!u.start) continue;
-        const key = `${u.fy}-${u.fp}`;
-        const existing = quarterMap.get(key);
+        if (!isQuarterDuration(u)) continue;
+        const endMonth = u.end.slice(0, 7); // 'YYYY-MM'
+        const existing = byEndMonth.get(endMonth);
         if (!existing || u.filed > existing.filed) {
-          quarterMap.set(key, u);
+          byEndMonth.set(endMonth, u);
         }
       }
 
-      // Build revenue lookup by (fy, fp) for YoY calculation
-      const revenueByKey = new Map<string, number>();
-      for (const [, u] of quarterMap) {
-        revenueByKey.set(key, u.val);
-      }
-
-      // Calculate YoY growth
+      // Calculate YoY growth: same end month, one year earlier.
       const rows: { series_id: string; date: string; value: number; source: string; fetched_at: string }[] = [];
 
-      for (const [, u] of quarterMap) {
-        const priorKey = `${u.fy - 1}-${u.fp}`;
-        const priorRevenue = revenueByKey.get(priorKey);
+      for (const [endMonth, u] of byEndMonth) {
+        const [y, m] = endMonth.split('-');
+        const priorMonth = `${Number(y) - 1}-${m}`;
+        const prior = byEndMonth.get(priorMonth);
 
-        if (priorRevenue && priorRevenue > 0) {
-          const yoyGrowth = ((u.val - priorRevenue) / priorRevenue) * 100;
-          const date = fpToQuarterDate(u.fy, u.fp);
+        if (prior && prior.val > 0) {
+          const yoyGrowth = ((u.val - prior.val) / prior.val) * 100;
+          const date = quarterEndDate(u);
           if (!date) continue;
 
           rows.push({
@@ -137,7 +140,7 @@ Deno.serve(async () => {
           results[ticker] = rows.length;
         }
       } else {
-        errors[ticker] = `Parsed ${quarterMap.size} quarters but no YoY pairs found`;
+        errors[ticker] = `Parsed ${byEndMonth.size} quarters but no YoY pairs found`;
       }
     }
 

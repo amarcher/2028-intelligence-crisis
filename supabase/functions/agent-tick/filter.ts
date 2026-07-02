@@ -28,8 +28,9 @@ export const WHITELIST = [
 const WHITELIST_SET = new Set<string>(WHITELIST);
 
 // SaaS short-thesis names — DTE < 30 on puts here is against the playbook
-// (force LEAPS or 3-6 month minimum in Phase 1).
-const SAAS_SHORTS = new Set(['NOW', 'CRM', 'HUBS', 'WDAY', 'DDOG', 'FRSH']);
+// (force LEAPS or 3-6 month minimum in Phase 1). DDOG removed: it's an
+// AI-infrastructure winner, no longer part of the short set.
+const SAAS_SHORTS = new Set(['NOW', 'CRM', 'HUBS', 'WDAY', 'FRSH']);
 
 // Leveraged inverse ETFs — allowed only with explicit tactical justification.
 // Not on whitelist, so they'd also fail that check; explicit flag gives a
