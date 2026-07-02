@@ -26,9 +26,15 @@ export const CAPS = {
   singleNameMaxPct: 15,
   dailyGrossMaxPct: 20,
   maxOptionTickets: 12,
+  /** Leveraged inverse ETFs (paper-only tactical archetype): hard per-ticket
+   *  AND single-name ceiling, far below the normal caps. */
+  tacticalInverseMaxPct: 2,
   marketOpenMinutes: 9 * 60 + 30, // 09:30 ET
   marketCutoffMinutes: 15 * 60 + 55, // 15:55 ET (leave 5min before close)
 };
+
+/** Tickers allowed ONLY as tactical_inverse archetype trades. */
+export const TACTICAL_INVERSE_TICKERS = new Set(['SQQQ', 'SPXS']);
 
 // ————— size_hint → notional translation —————
 // For NEW positions (open/add), these map to a target % of account equity.
@@ -159,6 +165,33 @@ export function validateTrade(p: Proposal, ctx: GuardrailContext): GuardrailDeci
     return { outcome: 'rejected', reason: `off-whitelist ticker: ${p.ticker}` };
   }
 
+  // Tactical inverse ETFs: paper-only archetype with hard fences. The 5-day
+  // window is enforced by the exit engine via time_stop; here we refuse to
+  // open one without the stop or outside paper mode.
+  if (TACTICAL_INVERSE_TICKERS.has(p.ticker) && (p.action === 'open' || p.action === 'add')) {
+    if (!config.paper_mode) {
+      return { outcome: 'rejected', reason: `${p.ticker} is a paper-only tactical instrument` };
+    }
+    if (p.archetype !== 'tactical_inverse' || !p.time_stop) {
+      return {
+        outcome: 'rejected',
+        reason: `${p.ticker} requires archetype=tactical_inverse with a time_stop (5 trading days max)`,
+      };
+    }
+  }
+
+  // Archetypes that decay or straddle a known event must carry their exit.
+  if ((p.archetype === 'earnings_window' || p.archetype === 'tactical_inverse') && !p.time_stop) {
+    return { outcome: 'rejected', reason: `archetype ${p.archetype} requires a time_stop date` };
+  }
+
+  // Spreads need both legs to be resolvable.
+  if ((p.instrument === 'put_spread' || p.instrument === 'call_spread') &&
+      (p.action === 'open' || p.action === 'add') &&
+      (p.strike == null || p.strike_short == null)) {
+    return { outcome: 'rejected', reason: 'spread proposal missing strike or strike_short' };
+  }
+
   // Account status checks from Alpaca
   if (account.trading_blocked || account.account_blocked) {
     return { outcome: 'rejected', reason: 'Alpaca account blocked or trading disabled' };
@@ -199,6 +232,17 @@ export function validateTrade(p: Proposal, ctx: GuardrailContext): GuardrailDeci
   const sizePct = (notional / equity) * 100;
 
   // ————— caps —————
+
+  // Tactical inverse: hard 2% ceiling — reject, don't queue for approval.
+  if (TACTICAL_INVERSE_TICKERS.has(p.ticker) && (p.action === 'open' || p.action === 'add')) {
+    const existing = existingNotional(positions, p.ticker);
+    if (((existing + notional) / equity) * 100 > CAPS.tacticalInverseMaxPct) {
+      return {
+        outcome: 'rejected',
+        reason: `tactical inverse ${p.ticker} would exceed the hard ${CAPS.tacticalInverseMaxPct}% cap`,
+      };
+    }
+  }
 
   // Per-ticket: > 5% requires owner approval (not rejection — it can be the
   // right call occasionally)

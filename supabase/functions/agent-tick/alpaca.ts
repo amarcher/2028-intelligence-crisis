@@ -228,6 +228,68 @@ export async function placeOrder(
   return req<AlpacaOrder>(c, 'POST', tradingBase(c), '/v2/orders', body);
 }
 
+export interface SpreadLeg {
+  symbol: string; // OCC
+  side: 'buy' | 'sell';
+  /** buy_to_open / sell_to_open when opening; *_to_close when closing. */
+  position_intent: 'buy_to_open' | 'sell_to_open' | 'buy_to_close' | 'sell_to_close';
+}
+
+/** Place a multi-leg (mleg) options order — defined-risk spreads. qty is the
+ *  number of spreads; each leg rides with ratio_qty 1. Requires options
+ *  trading level 3 on the account (paper accounts default high enough). */
+export async function placeSpreadOrder(
+  c: AlpacaCredentials,
+  opts: {
+    legs: [SpreadLeg, SpreadLeg];
+    qty: number;
+    limitPrice: number; // net debit (positive) the buyer pays per spread
+    clientOrderId?: string;
+  },
+): Promise<AlpacaOrder> {
+  const body: Record<string, unknown> = {
+    order_class: 'mleg',
+    qty: String(opts.qty),
+    type: 'limit',
+    limit_price: String(opts.limitPrice),
+    time_in_force: 'day',
+    legs: opts.legs.map((l) => ({
+      symbol: l.symbol,
+      ratio_qty: '1',
+      side: l.side,
+      position_intent: l.position_intent,
+    })),
+  };
+  if (opts.clientOrderId) body.client_order_id = opts.clientOrderId;
+  return req<AlpacaOrder>(c, 'POST', tradingBase(c), '/v2/orders', body);
+}
+
+export interface OptionGreeksSnapshot {
+  symbol: string;
+  delta: number | null;
+}
+
+/** Option snapshots (greeks) — used for delta-adjusted exposure reporting.
+ *  Missing greeks (stale/illiquid contracts) come back as delta null. */
+export async function getOptionSnapshots(
+  c: AlpacaCredentials,
+  occSymbols: readonly string[],
+): Promise<Map<string, OptionGreeksSnapshot>> {
+  const out = new Map<string, OptionGreeksSnapshot>();
+  if (occSymbols.length === 0) return out;
+  const qs = new URLSearchParams({ symbols: occSymbols.join(',') });
+  const raw = await req<{
+    snapshots: Record<string, { greeks?: { delta?: number } }>;
+  }>(c, 'GET', DATA_BASE, `/v1beta1/options/snapshots?${qs.toString()}`);
+  for (const [symbol, snap] of Object.entries(raw.snapshots ?? {})) {
+    out.set(symbol, {
+      symbol,
+      delta: typeof snap.greeks?.delta === 'number' ? snap.greeks.delta : null,
+    });
+  }
+  return out;
+}
+
 /** Cancel every open order. Returns one status entry per order Alpaca tried to
  *  cancel. Safe to call when there are no open orders (returns []). */
 export async function cancelAllOrders(

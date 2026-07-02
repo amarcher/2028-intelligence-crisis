@@ -28,7 +28,7 @@ import {
   type AlpacaPosition,
 } from '../agent-tick/alpaca.ts';
 import { isInMarketHours } from '../agent-tick/guardrails.ts';
-import { placeSmartOrder } from '../agent-tick/execute.ts';
+import { executeSpreadProposal, placeSmartOrder } from '../agent-tick/execute.ts';
 import { sendTradeAlert } from '../agent-tick/alerts.ts';
 
 const SAAS_PUT_UNDERLYINGS = new Set(['NOW', 'CRM', 'HUBS', 'WDAY', 'FRSH']);
@@ -43,6 +43,8 @@ interface RuleRow {
   tier2_done: boolean;
   roll_alert_dte: number;
   roll_alerted_at: string | null;
+  archetype: string;
+  force_close_date: string | null;
 }
 
 interface OccParts {
@@ -100,10 +102,17 @@ Deno.serve(async () => {
 
     const creds = alpacaFromEnv(config.paper_mode !== false);
     const positions = await getPositions(creds);
-    const options = positions.filter(
-      (p) => p.asset_class === 'us_option' && p.qty > 0,
+    const allOptions = positions.filter((p) => p.asset_class === 'us_option');
+    // Underlyings with a short option leg are spread-managed: single-leg
+    // stop/ladder logic must NEVER touch them (selling the long leg alone
+    // would leave a naked short). Spreads exit only via force_close_date or
+    // reasoner close proposals.
+    const spreadUnderlyings = new Set(
+      allOptions
+        .filter((p) => p.qty < 0)
+        .map((p) => p.symbol.match(/^([A-Z]{1,6})/)?.[1] ?? p.symbol),
     );
-    if (options.length === 0) return json({ ...summary, note: 'no option positions' });
+    const options = allOptions.filter((p) => p.qty > 0);
 
     const { data: ruleRows, error: rulesErr } = await supabase
       .from('agent_position_rules')
@@ -113,10 +122,12 @@ Deno.serve(async () => {
       ((ruleRows ?? []) as RuleRow[]).map((r) => [r.option_symbol, r]),
     );
 
-    // Ensure every option position has a rules row (playbook defaults).
+    // Ensure every single-leg option position has a rules row (playbook
+    // defaults). Spread legs don't get default stop/ladder rules.
     for (const pos of options) {
       if (rules.has(pos.symbol)) continue;
       const occ = parseOcc(pos.symbol);
+      if (occ && spreadUnderlyings.has(occ.underlying)) continue;
       const row = {
         option_symbol: pos.symbol,
         ticker: occ?.underlying ?? pos.symbol,
@@ -127,11 +138,15 @@ Deno.serve(async () => {
         tier2_done: false,
         roll_alert_dte: 90,
         roll_alerted_at: null,
+        archetype: 'core',
+        force_close_date: null,
       };
       const { error } = await supabase.from('agent_position_rules').insert(row);
       if (!error) rules.set(pos.symbol, row as RuleRow);
       else summary.errors.push(`rule insert ${pos.symbol}: ${error.message}`);
     }
+
+    const today = new Date().toISOString().slice(0, 10);
 
     // Convexity floor bookkeeping: how many SaaS puts are alive?
     const saasPuts = options.filter((p) => {
@@ -140,10 +155,12 @@ Deno.serve(async () => {
     });
 
     for (const pos of options) {
+      const occ = parseOcc(pos.symbol);
+      // Spread legs: handled below via force_close_date only.
+      if (occ && spreadUnderlyings.has(occ.underlying)) continue;
       const rule = rules.get(pos.symbol);
       if (!rule) continue;
       summary.evaluated++;
-      const occ = parseOcc(pos.symbol);
       const plPct = pos.unrealized_plpc * 100;
       const priceMultiple =
         pos.avg_entry_price > 0 ? pos.current_price / pos.avg_entry_price : 0;
@@ -155,7 +172,14 @@ Deno.serve(async () => {
       let why = '';
       const flags: Record<string, unknown> = {};
 
-      if (plPct <= rule.stop_loss_pct) {
+      if (rule.force_close_date && rule.force_close_date <= today) {
+        // Time stop (earnings_window / tactical archetypes): close it all,
+        // regardless of P&L. Takes priority over every other rule.
+        sellQty = pos.qty;
+        action = 'close';
+        why = `Time's up on this ${rule.archetype.replace(/_/g, ' ')} trade — it had a pre-set close date (${rule.force_close_date}) and today we close it, win or lose.`;
+        summary.stops++;
+      } else if (plPct <= rule.stop_loss_pct) {
         // Stop-loss. Last-SaaS-put floor: sell half instead of all.
         const lastSaasPut = isSaasPut && saasPuts.length === 1;
         if (lastSaasPut && pos.qty <= 1) {
@@ -275,8 +299,116 @@ Deno.serve(async () => {
       }
     }
 
-    // Clean up rules for positions that no longer exist.
-    const live = new Set(options.map((p) => p.symbol));
+    // ————— spread time stops —————
+    // Spread pairs exit ONLY here (or via reasoner close proposals) — never
+    // through single-leg stop/ladder logic.
+    const closedSpreadUnderlyings = new Set<string>();
+    for (const rule of rules.values()) {
+      if (!rule.force_close_date || rule.force_close_date > today) continue;
+      const occ = parseOcc(rule.option_symbol);
+      if (!occ || !spreadUnderlyings.has(occ.underlying)) continue;
+      if (closedSpreadUnderlyings.has(occ.underlying)) continue;
+      closedSpreadUnderlyings.add(occ.underlying);
+      const syntheticClose = {
+        action: 'close',
+        ticker: occ.underlying,
+        instrument: occ.type === 'put' ? 'put_spread' : 'call_spread',
+        expiry: null,
+        strike: null,
+        size_hint: 'full',
+        rationale: '',
+        exit_condition: '',
+        urgency: 'act_today',
+      } as unknown as Parameters<typeof executeSpreadProposal>[1];
+      const res = await executeSpreadProposal(
+        creds, syntheticClose, 0, positions, `exit-sprd-${occ.underlying}-${today}`,
+      );
+      if (!res.ok) {
+        summary.errors.push(`spread close ${occ.underlying}: ${res.reason}`);
+        continue;
+      }
+      summary.stops++;
+      await supabase.from('agent_orders').insert({
+        ticker: occ.underlying,
+        instrument: occ.type === 'put' ? 'put_spread' : 'call_spread',
+        option_symbol: res.longSymbol,
+        side: 'sell',
+        qty: res.qty,
+        order_type: 'limit',
+        limit_price: res.limitPrice,
+        notional_usd: null,
+        status: 'submitted',
+        alpaca_order_id: res.order.id,
+        submitted_at: res.order.submitted_at,
+        raw_alpaca: res.order,
+      });
+      await sendTradeAlert({
+        action: 'close',
+        side: 'sell',
+        ticker: occ.underlying,
+        instrument: occ.type,
+        option_symbol: `${res.longSymbol} / ${res.shortSymbol}`,
+        expiry: occ.expiry,
+        strike: occ.strike,
+        qty: res.qty,
+        notional_usd: null,
+        rationale: `Time's up on this ${rule.archetype.replace(/_/g, ' ')} spread — pre-set close date ${rule.force_close_date} reached; closing both legs together.`,
+        exit_condition: 'This was the exit — an automatic time stop.',
+        alpaca_order_id: res.order.id,
+      });
+    }
+
+    // ————— tactical equity time stops (SQQQ/SPXS) —————
+    for (const rule of rules.values()) {
+      if (parseOcc(rule.option_symbol)) continue; // options handled above
+      if (!rule.force_close_date || rule.force_close_date > today) continue;
+      const eqPos = positions.find(
+        (p) => p.asset_class !== 'us_option' && p.symbol === rule.option_symbol && p.qty > 0,
+      );
+      if (!eqPos) continue;
+      try {
+        const { order } = await placeSmartOrder(creds, {
+          symbol: eqPos.symbol,
+          qty: eqPos.qty,
+          side: 'sell',
+          isOption: false,
+          clientOrderId: `exit-eq-${eqPos.symbol}-${today}`,
+        });
+        summary.stops++;
+        await supabase.from('agent_orders').insert({
+          ticker: eqPos.symbol,
+          instrument: 'equity',
+          side: 'sell',
+          qty: eqPos.qty,
+          order_type: 'market',
+          notional_usd: Math.abs(eqPos.market_value),
+          status: 'submitted',
+          alpaca_order_id: order.id,
+          submitted_at: order.submitted_at,
+          raw_alpaca: order,
+        });
+        await sendTradeAlert({
+          action: 'close',
+          side: 'sell',
+          ticker: eqPos.symbol,
+          instrument: 'equity',
+          qty: eqPos.qty,
+          notional_usd: Math.abs(eqPos.market_value),
+          rationale: `The ${rule.archetype.replace(/_/g, ' ')} window ended (${rule.force_close_date}) — selling the whole position on schedule. These leveraged funds lose value if held too long.`,
+          exit_condition: 'This was the exit — an automatic time stop.',
+          alpaca_order_id: order.id,
+        });
+      } catch (e) {
+        summary.errors.push(`tactical close ${eqPos.symbol}: ${String(e).slice(0, 150)}`);
+      }
+    }
+
+    // Clean up rules for positions that no longer exist (option symbols AND
+    // equity tickers with tactical rules).
+    const live = new Set<string>([
+      ...allOptions.map((p) => p.symbol),
+      ...positions.filter((p) => p.asset_class !== 'us_option').map((p) => p.symbol),
+    ]);
     const stale = [...rules.keys()].filter((s) => !live.has(s));
     if (stale.length > 0) {
       await supabase.from('agent_position_rules').delete().in('option_symbol', stale);

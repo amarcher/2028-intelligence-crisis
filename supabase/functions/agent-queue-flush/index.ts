@@ -20,7 +20,7 @@ import {
   getPositions,
 } from '../agent-tick/alpaca.ts';
 import { validateTrade, type GuardrailContext, type PriorOrderSummary } from '../agent-tick/guardrails.ts';
-import { buildOrderPlan, placeSmartOrder, sideFromAction } from '../agent-tick/execute.ts';
+import { buildOrderPlan, executeSpreadProposal, placeSmartOrder, sideFromAction } from '../agent-tick/execute.ts';
 import { reconcileOrders } from '../agent-tick/reconcile.ts';
 import { sendTradeAlert } from '../agent-tick/alerts.ts';
 import type { Proposal } from '../agent-tick/reasoner.ts';
@@ -169,6 +169,49 @@ Deno.serve(async () => {
         continue;
       }
 
+      // Spreads take the mleg path.
+      if (p.instrument === 'put_spread' || p.instrument === 'call_spread') {
+        const res = await executeSpreadProposal(
+          creds, p, decision.notional, positions, `q-${row.id.slice(0, 13)}`,
+        );
+        if (!res.ok) {
+          await supabase
+            .from('agent_orders')
+            .update({ status: 'rejected', rejection_reason: res.reason })
+            .eq('id', row.id);
+          summary.rejected++;
+          continue;
+        }
+        await supabase
+          .from('agent_orders')
+          .update({
+            status: 'submitted',
+            alpaca_order_id: res.order.id,
+            submitted_at: res.order.submitted_at,
+            qty: res.qty,
+            option_symbol: res.longSymbol,
+            order_type: 'limit',
+            limit_price: res.limitPrice,
+            notional_usd: decision.notional,
+            raw_alpaca: res.order,
+            rejection_reason: null,
+          })
+          .eq('id', row.id);
+        if (p.time_stop || (p.archetype && p.archetype !== 'core')) {
+          await supabase.from('agent_position_rules').upsert(
+            {
+              option_symbol: res.longSymbol,
+              ticker: p.ticker,
+              archetype: p.archetype ?? 'core',
+              force_close_date: p.time_stop ?? null,
+            },
+            { onConflict: 'option_symbol' },
+          );
+        }
+        summary.placed++;
+        continue;
+      }
+
       const plan = await buildOrderPlan(creds, p, decision.notional, positions);
       if (!plan.ok) {
         await supabase
@@ -202,6 +245,18 @@ Deno.serve(async () => {
             rejection_reason: null,
           })
           .eq('id', row.id);
+        if ((p.time_stop || (p.archetype && p.archetype !== 'core')) &&
+            (p.action === 'open' || p.action === 'add')) {
+          await supabase.from('agent_position_rules').upsert(
+            {
+              option_symbol: plan.optionSymbol ?? p.ticker,
+              ticker: p.ticker,
+              archetype: p.archetype ?? 'core',
+              force_close_date: p.time_stop ?? null,
+            },
+            { onConflict: 'option_symbol' },
+          );
+        }
         summary.placed++;
 
         const alertRes = await sendTradeAlert({

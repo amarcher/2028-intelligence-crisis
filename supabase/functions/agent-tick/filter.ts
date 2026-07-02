@@ -23,6 +23,9 @@ export const WHITELIST = [
   'XLY', 'RH', 'W', 'CCL', 'NCLH', 'UPWK', 'FIVN',
   // Indices + vol
   'SPY', 'IWM', 'VIXY',
+  // Tactical inverse (paper-only archetype; guardrails cap at 2% + 5-day
+  // time stop — see guardrails.TACTICAL_INVERSE_TICKERS)
+  'SQQQ', 'SPXS',
 ] as const;
 
 const WHITELIST_SET = new Set<string>(WHITELIST);
