@@ -11,6 +11,7 @@
 //   DASHBOARD_URL           — optional; included as a permalink in the digest
 
 import type { ActiveSleeveSummary, Proposal } from './reasoner.ts';
+import type { TriggerProximity } from '../../../src/lib/proximity.ts';
 
 export interface DigestPayload {
   tick_type: 'premarket' | 'midday' | 'close' | 'weekly';
@@ -22,6 +23,8 @@ export interface DigestPayload {
   drift_notes: string | null;
   active_sleeve: ActiveSleeveSummary | null;
   reasoner_status: string;
+  /** Weekly report card: per-trigger distance + pace → ETA. Null on daily ticks. */
+  proximity?: TriggerProximity[] | null;
 }
 
 export interface DeliveryResult {
@@ -154,6 +157,7 @@ function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
 
   const drift = d.drift_notes ? `\n\n*This week's economic update:* ${d.drift_notes}` : '';
   const activeSleeve = formatActiveSleeve(d.active_sleeve);
+  const reportCard = formatProximity(d.proximity ?? null);
 
   const proposals =
     d.proposals.length > 0
@@ -164,7 +168,23 @@ function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
     ? `\n\n—\n<${dashboardUrl}|Open the dashboard>`
     : '';
 
-  return `${header}\n\n${d.narrative}${activeSleeve}${drift}${proposals}${footer}`;
+  return `${header}\n\n${d.narrative}${activeSleeve}${drift}${reportCard}${proposals}${footer}`;
+}
+
+/** Weekly "how close is each danger line" report card, in plain English. */
+function formatProximity(prox: TriggerProximity[] | null): string {
+  if (!prox || prox.length === 0) return '';
+  const lines = prox.map((p) => {
+    const pct = p.progressPct != null ? `${Math.min(p.progressPct, 100)}% of the way there` : 'no read';
+    const eta =
+      p.etaMonths == null
+        ? 'not on track to cross at the current pace'
+        : p.etaMonths === 0
+          ? '*crossed*'
+          : `~${p.etaMonths} months away at the current pace`;
+    return `• ${p.label}: ${pct} · ${eta}`;
+  });
+  return `\n\n*How close is each danger line?*\n${lines.join('\n')}`;
 }
 
 // Light HTML conversion for email — keeps formatting legible in Gmail etc.
