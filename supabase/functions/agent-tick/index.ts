@@ -17,8 +17,10 @@ import {
   type OptionChainSnapshot,
   type PositionSummary,
   type Proposal,
+  type NewsPulseReading,
   type RecentDigest,
   type RecentOrderOutcome,
+  type UpcomingEarnings,
   type ShippingPulseSummary,
   type ShippingReading,
   type TapeReading,
@@ -104,6 +106,8 @@ const FRED = {
   sp500: 'SP500',
   caseShiller: 'CSUSHPISA',
   vix: 'VIXCLS',
+  hyOas: 'BAMLH0A0HYM2',
+  continuedClaims: 'CCSA',
 } as const;
 
 const SAAS_SERIES: Array<{ id: string; field: keyof Omit<SaaSDataPoint, 'date'> }> = [
@@ -131,6 +135,7 @@ const ACTIVE_BAR_UNIVERSE = [
 
 const MEMORY_DEPTH: Record<TickType, number> = {
   premarket: 3,
+  midday: 3,
   close: 3,
   weekly: 8,
 };
@@ -154,17 +159,19 @@ Deno.serve(async (req: Request) => {
     const body: TickRequest = await req.json().catch(() => ({}));
     const tickType: TickType = body.tick_type ?? 'close';
 
-    const [jolts, claims, sp500, caseShiller, vix, saasSeries] = await Promise.all([
+    const [jolts, claims, sp500, caseShiller, vix, hyOas, continuedClaims, saasSeries] = await Promise.all([
       loadSeries(supabase, FRED.jolts),
       loadSeries(supabase, FRED.claims),
       loadSeries(supabase, FRED.sp500),
       loadSeries(supabase, FRED.caseShiller),
       loadSeries(supabase, FRED.vix),
+      loadSeries(supabase, FRED.hyOas),
+      loadSeries(supabase, FRED.continuedClaims),
       Promise.all(SAAS_SERIES.map(({ id }) => loadSeries(supabase, id))),
     ]);
 
     const saas = mergeSaasSeries(saasSeries);
-    const result = computeSignals({ jolts, claims, sp500, caseShiller, saas });
+    const result = computeSignals({ jolts, claims, sp500, caseShiller, saas, hyOas });
 
     const drift: DriftSummary = {
       jolts: weekOverWeek(jolts),
@@ -172,6 +179,8 @@ Deno.serve(async (req: Request) => {
       sp500: weekOverWeek(sp500),
       caseShiller: weekOverWeek(caseShiller),
       ...(vix.length > 0 ? { vix: weekOverWeek(vix) } : {}),
+      ...(hyOas.length > 0 ? { hyOas: weekOverWeek(hyOas) } : {}),
+      ...(continuedClaims.length > 0 ? { continuedClaims: weekOverWeek(continuedClaims) } : {}),
     };
 
     const recentDigests = await loadRecentDigests(supabase, MEMORY_DEPTH[tickType]);
@@ -273,6 +282,10 @@ Deno.serve(async (req: Request) => {
     // to its prior proposals (filled / queued for open / rejected and why)
     // instead of re-proposing blind.
     const recentOrders = await loadRecentOrders(supabase);
+    const [earnings, newsPulse] = await Promise.all([
+      loadUpcomingEarnings(supabase),
+      loadNewsPulse(supabase),
+    ]);
 
     // Snapshot lands regardless of whether the reasoner succeeds.
     const { data: snapshot, error: snapError } = await supabase
@@ -313,6 +326,8 @@ Deno.serve(async (req: Request) => {
         optionChains,
         activeSleeve,
         recentOrders,
+        earnings,
+        newsPulse,
       });
 
       digestRow = {
@@ -918,6 +933,67 @@ async function writeMeasurement(
 
   const { error: miErr } = await supabase.from('meta_indices').insert(rows);
   if (miErr) console.warn(`meta_indices insert failed: ${miErr.message}`);
+}
+
+/** Earnings within the next 21 days for the whitelist SaaS/AI names. */
+async function loadUpcomingEarnings(
+  supabase: ReturnType<typeof createClient>,
+): Promise<UpcomingEarnings[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const horizon = new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from('earnings_calendar')
+    .select('ticker, report_date, source, confirmed')
+    .gte('report_date', today)
+    .lte('report_date', horizon)
+    .order('report_date', { ascending: true });
+  if (error) {
+    console.warn(`loadUpcomingEarnings failed (non-fatal): ${error.message}`);
+    return [];
+  }
+  return (data ?? []) as UpcomingEarnings[];
+}
+
+/** Latest news-pulse features (last 36h) per ticker, pivoted for the prompt. */
+async function loadNewsPulse(
+  supabase: ReturnType<typeof createClient>,
+): Promise<NewsPulseReading[]> {
+  const since = new Date(Date.now() - 36 * 3_600_000).toISOString();
+  const { data, error } = await supabase
+    .from('signal_features')
+    .select('ticker, feature, value, detail, observed_at')
+    .gte('observed_at', since)
+    .order('observed_at', { ascending: false });
+  if (error) {
+    console.warn(`loadNewsPulse failed (non-fatal): ${error.message}`);
+    return [];
+  }
+  const byTicker = new Map<string, NewsPulseReading>();
+  for (const row of data ?? []) {
+    const t = String(row.ticker);
+    let r = byTicker.get(t);
+    if (!r) {
+      r = { ticker: t, sentiment: null, layoffMentions: 0, aiDisplacementMentions: 0, guidanceCutMentions: 0, notable: null };
+      byTicker.set(t, r);
+    }
+    const v = Number(row.value);
+    switch (row.feature) {
+      case 'news_sentiment':
+        if (r.sentiment == null) r.sentiment = v;
+        if (!r.notable) r.notable = (row.detail as { notable?: string } | null)?.notable ?? null;
+        break;
+      case 'layoff_mentions':
+        r.layoffMentions = Math.max(r.layoffMentions, v);
+        break;
+      case 'ai_displacement_mentions':
+        r.aiDisplacementMentions = Math.max(r.aiDisplacementMentions, v);
+        break;
+      case 'guidance_cut_mentions':
+        r.guidanceCutMentions = Math.max(r.guidanceCutMentions, v);
+        break;
+    }
+  }
+  return [...byTicker.values()];
 }
 
 /** Last-48h order outcomes for the reasoner's context window. */

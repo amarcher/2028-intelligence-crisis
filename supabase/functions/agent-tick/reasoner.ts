@@ -10,7 +10,7 @@
 import type { SignalsResult, Signal } from '../../../src/lib/signals.ts';
 import { WHITELIST, annotateProposals } from './filter.ts';
 
-export type TickType = 'premarket' | 'close' | 'weekly';
+export type TickType = 'premarket' | 'midday' | 'close' | 'weekly';
 
 export interface WowSummary {
   last: number | null;
@@ -27,6 +27,11 @@ export interface DriftSummary {
    *  Low + stable VIX = complacency (counterfactual for the thesis).
    *  VIX spiking = risk-off regime shift (thesis-aligned). */
   vix?: WowSummary;
+  /** High-yield OAS (%, daily) — credit trigger context. Widening = stress. */
+  hyOas?: WowSummary;
+  /** Continued unemployment claims — the leading edge of the layoff wave
+   *  (people who lost a job and can't find the next one). */
+  continuedClaims?: WowSummary;
 }
 
 export interface RecentDigest {
@@ -150,6 +155,23 @@ export interface RecentOrderOutcome {
   rejection_reason: string | null;
 }
 
+export interface UpcomingEarnings {
+  ticker: string;
+  report_date: string; // YYYY-MM-DD
+  source: string;
+  confirmed: boolean;
+}
+
+export interface NewsPulseReading {
+  ticker: string;
+  /** −2 (very negative) … +2 (very positive), from headline triage. */
+  sentiment: number | null;
+  layoffMentions: number;
+  aiDisplacementMentions: number;
+  guidanceCutMentions: number;
+  notable: string | null;
+}
+
 export interface ReasonerInput {
   tickType: TickType;
   signals: SignalsResult;
@@ -159,6 +181,11 @@ export interface ReasonerInput {
    *  why. Lets the reasoner avoid re-proposing what's already in flight and
    *  learn the guardrails instead of bouncing off them blind. */
   recentOrders?: RecentOrderOutcome[];
+  /** Earnings report dates within the next ~3 weeks for tracked names. */
+  earnings?: UpcomingEarnings[];
+  /** Daily Haiku-triaged news signals per ticker (layoffs, AI displacement,
+   *  guidance-cut chatter). Corroborator — weigh it, don't trade on it alone. */
+  newsPulse?: NewsPulseReading[];
   /** Live account state. Present when mode=auto_execute + phase != shadow +
    *  Alpaca creds available. Absent in signal-only / shadow. */
   account?: AccountSummary;
@@ -302,15 +329,18 @@ Tone: friendly, direct, like explaining to a smart friend who has not invested b
 
 Use the labels "Waiting phase" (when 0–1 readings have crossed) and "Action phase" (when 2+ have crossed) in user-visible text. Never write "Phase 1 · Counterfactual Grind" or "Phase 2 · Inflection" in narrative or drift_notes.
 
-## The five Phase-Flip signals
+## The six Phase-Flip signals
 
 These are the dashboard's primary triggers. At least two must fire to move from Phase 1 to Phase 2:
 
 1. **JOLTS breakdown** — JOLTS job openings below 6.0M for two prints in a row. Leading indicator for white-collar layoffs.
 2. **Claims spike** — Initial unemployment claims, 4-week rolling average above 300K. First hard evidence of the layoff wave.
-3. **SaaS guide-down** — ServiceNow AND Workday ACV growth both below 14%. Systems-of-record slipping confirms build-vs-buy shift.
-4. **S&P peak stall** — S&P 500 has reached ≥ 7,500 and has failed to make a new high for at least two monthly prints. The bubble is topping.
+3. **SaaS guide-down** — ServiceNow AND Workday revenue growth both below 14%. Systems-of-record slipping confirms build-vs-buy shift.
+4. **S&P peak stall** — S&P 500 has reached ≥ 7,500 and has failed to make a new high for at least two months. The bubble is topping.
 5. **Housing roll** — Case-Shiller national YoY turns negative. Tech-hub housing contagion feeds bank and CRE tail.
+6. **Credit stress** — High-yield OAS at least 3.5% AND at least 1 point above its 3-month low, for 5 straight sessions. Lenders repricing risk marks the contagion phase.
+
+Tick types: premarket and close are the scheduled daily checks; weekly is the Monday deep review; **midday** ticks fire only when the event watcher sees a big intraday move (a whitelist name ±5% or a volatility spike) — treat a midday tick as "something just happened, assess it," not as a scheduled drumbeat.
 
 ## Phase policy
 
@@ -444,7 +474,8 @@ Use prior digests to:
 4. Emit at most 6 proposals. Each must include action, ticker (whitelist only), instrument, size_hint, rationale grounded in specific signal state or drift, a concrete \`exit_condition\` (one sentence naming the trigger — signal flip, price level, drift reversal, or time-based roll/expiry), and urgency. No timestamps, no limit prices. Option proposals (put/call/put_spread/call_spread) MUST include a concrete numeric \`strike\` and an \`expiry\` like 'Jan 2027'. Anchor strikes to the "Current tape" block (latest-trade price per whitelist equity). When the "Available option chains" block lists strikes for your underlying/expiry/type, you MUST pick one of the listed numbers — do not invent a strike that isn't on the listing. Workflow: compute your intended %OTM target from tape (e.g. tape $940 × 0.75 = $705 for a 25% OTM put), then pick the closest listed strike (e.g. 700). If the listed chain doesn't have a strike near your target (gap > 10% of tape), **amend the plan** — either pick the closest listed strike and describe the revised %OTM in the rationale, or drop the proposal and use a different underlying with a denser chain. The executor resolves the OCC contract inside a tight ±5% window, so your strike must match a listing. If no chain is listed for your ticker (fallback — e.g. credit shorts outside the pre-loaded set), anchor to tape and round to $5 / $10, but flag the guess in the rationale.
 5. \`narrative\`: 2–3 sentences, action-first. Say where we are ("Phase 1 · signal count unchanged"), then what matters ("JOLTS inched lower; keep the LEAPS book; no action").
 6. \`drift_notes\`: one sentence on the week-over-week read, or null if nothing noteworthy.
-7. If tick_type is 'weekly', emit a scorecard: for each of jolts, claims, saas, sp500, housing — mark 'fired', 'pending', or 'reversed' (fired previously but no longer).
+7. If tick_type is 'weekly', emit a scorecard: for each of jolts, claims, saas, sp500, housing, credit — mark 'fired', 'pending', or 'reversed' (fired previously but no longer).
+8. Upcoming earnings are context: prefer option expiries that don't straddle a report you have no view on, and note in drift_notes when a tracked name reports within 5 trading days. News-pulse readings corroborate — they sharpen a rationale but never justify a trade alone.
 
 ## Tone
 
@@ -477,7 +508,7 @@ const TOOL: AnthropicTool = {
       narrative: {
         type: 'string',
         description:
-          '2–3 sentences in PLAIN ENGLISH for a non-investor. Lead with what is happening and what (if anything) to do. NO finance jargon — no "thesis", "counterfactual", "firing", "kill switch", "LEAPS", "OTM", "drift", "book". Use "Waiting phase" / "Action phase", "X of 5 readings have crossed the danger line", and concrete actions like "buy", "sell some", "close everything".',
+          '2–3 sentences in PLAIN ENGLISH for a non-investor. Lead with what is happening and what (if anything) to do. NO finance jargon — no "thesis", "counterfactual", "firing", "kill switch", "LEAPS", "OTM", "drift", "book". Use "Waiting phase" / "Action phase", "X of 6 readings have crossed the danger line", and concrete actions like "buy", "sell some", "close everything".',
       },
       drift_notes: {
         type: ['string', 'null'],
@@ -550,7 +581,7 @@ const TOOL: AnthropicTool = {
       scorecard: {
         type: ['object', 'null'],
         description:
-          'Weekly tick only. Map of signal_key (jolts|claims|saas|sp500|housing) to fired|pending|reversed.',
+          'Weekly tick only. Map of signal_key (jolts|claims|saas|sp500|housing|credit) to fired|pending|reversed.',
         additionalProperties: { type: 'string', enum: ['fired', 'pending', 'reversed'] },
       },
     },
@@ -579,9 +610,32 @@ function renderRecentDigests(recent: RecentDigest[]): string {
   return recent
     .map(
       (d, i) =>
-        `  [${i + 1}] ${d.created_at.slice(0, 10)} · ${d.tick_type} · ${d.phase} · ${d.fired_count}/5${d.kill_switch_triggered ? ' · KILL-SWITCH' : ''}\n      "${d.narrative.slice(0, 240)}"`,
+        `  [${i + 1}] ${d.created_at.slice(0, 10)} · ${d.tick_type} · ${d.phase} · ${d.fired_count} crossed${d.kill_switch_triggered ? ' · KILL-SWITCH' : ''}\n      "${d.narrative.slice(0, 240)}"`,
     )
     .join('\n');
+}
+
+function renderEarnings(earnings: UpcomingEarnings[] | undefined): string {
+  if (!earnings || earnings.length === 0) return '(none in the next 3 weeks)';
+  return earnings
+    .map((e) => `  - ${e.ticker} reports ${e.report_date}${e.confirmed ? '' : ' (estimated from filing cadence)'}`)
+    .join('\n');
+}
+
+function renderNewsPulse(pulse: NewsPulseReading[] | undefined): string {
+  if (!pulse || pulse.length === 0) return '(no news triage available)';
+  const lines = pulse
+    .filter((p) => p.sentiment != null || p.layoffMentions > 0 || p.aiDisplacementMentions > 0 || p.guidanceCutMentions > 0)
+    .map((p) => {
+      const bits: string[] = [];
+      if (p.sentiment != null) bits.push(`sentiment ${p.sentiment >= 0 ? '+' : ''}${p.sentiment}`);
+      if (p.layoffMentions > 0) bits.push(`layoff mentions ${p.layoffMentions}`);
+      if (p.aiDisplacementMentions > 0) bits.push(`AI-displacement mentions ${p.aiDisplacementMentions}`);
+      if (p.guidanceCutMentions > 0) bits.push(`guidance-cut chatter ${p.guidanceCutMentions}`);
+      const notable = p.notable ? ` · "${p.notable.slice(0, 110)}"` : '';
+      return `  - ${p.ticker}: ${bits.join(' · ')}${notable}`;
+    });
+  return lines.length > 0 ? lines.join('\n') : '(nothing notable in the last 36h)';
 }
 
 function renderRecentOrders(orders: RecentOrderOutcome[] | undefined): string {
@@ -729,20 +783,26 @@ ${renderTape(tapeQuotes)}
 Available option chains (listed strikes — pick from these; if your %OTM target sits between two listed strikes, choose the closer one or amend the plan):
 ${renderOptionChains(optionChains)}
 
-Current signal state (${signals.firedCount}/5 firing · phase: ${signals.phase}):
+Current signal state (${signals.firedCount}/${signals.signals.length} firing · phase: ${signals.phase}):
 ${signals.signals.map(renderSignal).join('\n')}
 
 Week-over-week drift (last print · change):
 ${renderWow('JOLTS', drift.jolts)}
 ${renderWow('Initial claims', drift.claims)}
 ${renderWow('S&P 500', drift.sp500)}
-${renderWow('Case-Shiller national', drift.caseShiller)}${drift.vix ? `\n${renderWow('VIX', drift.vix)}` : ''}
+${renderWow('Case-Shiller national', drift.caseShiller)}${drift.vix ? `\n${renderWow('VIX', drift.vix)}` : ''}${drift.hyOas ? `\n${renderWow('High-yield OAS (%)', drift.hyOas)}` : ''}${drift.continuedClaims ? `\n${renderWow('Continued claims', drift.continuedClaims)}` : ''}
 
 Shipping pulse (corroborator — never initiates a proposal):
 ${renderShippingPulse(shippingPulse)}
 
 Modified-thesis active sleeve (fast layer — SaaS-vs-AI, does not trigger Action phase):
 ${renderActiveSleeve(activeSleeve)}
+
+Upcoming earnings (context for positioning and expiry choices):
+${renderEarnings(input.earnings)}
+
+News pulse (daily headline triage — corroborator, never the sole basis for a trade):
+${renderNewsPulse(input.newsPulse)}
 
 Recent order outcomes (last 48h — QUEUED means waiting for the market open; do not re-propose it):
 ${renderRecentOrders(input.recentOrders)}

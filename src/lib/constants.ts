@@ -39,6 +39,8 @@ export const FRED_SERIES = {
   fed_receipts: 'W006RC1Q027SBEA',
   treasury_10y: 'DGS10',
   sp500: 'SP500',
+  hy_oas: 'BAMLH0A0HYM2',
+  continued_claims: 'CCSA',
   pce: 'PCE',
   cc_delinquency: 'DRCCLACBS',
   mortgage_delinquency: 'DRSFRMACBS',

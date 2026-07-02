@@ -12,7 +12,9 @@ const FRED_SERIES = [
   'USINFO', 'PRS85006173', 'PCE',
   'LES1252881600Q', 'W006RC1Q027SBEA',
   'OPHNFB', 'A191RL1Q225SBEA', 'CSUSHPISA',
-  'VIXCLS', // CBOE Volatility Index — regime context for the reasoner
+  'VIXCLS',        // CBOE Volatility Index — regime context for the reasoner
+  'BAMLH0A0HYM2',  // ICE BofA US High Yield OAS — credit-stress trigger #6
+  'CCSA',          // Continued claims — leading edge of the layoff-wave trigger
 ];
 
 interface FredObservation {
@@ -54,7 +56,7 @@ Deno.serve(async (req: Request) => {
     // prints the print-counting logic fired "no new high for 2 months" three
     // weeks after an all-time high. Daily closes also give the reasoner a
     // real day-over-day drift read instead of a stale Friday snapshot.
-    const DAILY_SERIES = new Set(['DGS10', 'SP500', 'VIXCLS']);
+    const DAILY_SERIES = new Set(['DGS10', 'SP500', 'VIXCLS', 'BAMLH0A0HYM2']);
 
     const results: Record<string, number> = {};
 
