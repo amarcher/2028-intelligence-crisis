@@ -10,6 +10,7 @@ export default function PhaseFlipSignals() {
   const claims = useEconomicData(FRED_SERIES.initial_claims, 'initial_claims');
   const sp500 = useEconomicData(FRED_SERIES.sp500, 'sp500');
   const caseShiller = useEconomicData(FRED_SERIES.case_shiller_national, 'case_shiller_national');
+  const hyOas = useEconomicData(FRED_SERIES.hy_oas, 'hy_oas');
   const saas = useSaaSData();
 
   const { signals, firedCount, phase, phaseLabel, verdict, playbook } = useMemo(
@@ -20,8 +21,9 @@ export default function PhaseFlipSignals() {
         sp500: sp500.data,
         caseShiller: caseShiller.data,
         saas: saas.data,
+        hyOas: hyOas.data,
       }),
-    [jolts.data, claims.data, sp500.data, caseShiller.data, saas.data],
+    [jolts.data, claims.data, sp500.data, caseShiller.data, saas.data, hyOas.data],
   );
 
   const phaseFlipped = phase === 'inflection';
@@ -31,7 +33,7 @@ export default function PhaseFlipSignals() {
     <div id="section-phase-flip">
       <SectionCard
         number="06"
-        title="The five economic readings we're watching"
+        title="The six economic readings we're watching"
         quote="The prediction is right about what will happen — just not yet about when. Wait for the readings to confirm before betting on a downturn."
         verdict={verdict}
         accentColor={COLORS.accent}
@@ -54,12 +56,12 @@ export default function PhaseFlipSignals() {
             <span className="text-[11px] mt-0.5" style={{ color: COLORS.textDim }}>
               {phaseFlipped
                 ? "Two or more readings have crossed the danger line — time to switch from the defensive setup to bets on a market drop."
-                : "Holding defensive positions. We wait until at least 2 of the 5 readings cross before betting heavily on a downturn."}
+                : `Holding defensive positions. We wait until at least 2 of the ${signals.length} readings cross before betting heavily on a downturn.`}
             </span>
           </div>
           <div className="flex items-baseline gap-1 font-display" style={{ color: phaseColor }}>
             <span className="text-[28px] font-extrabold leading-none">{firedCount}</span>
-            <span className="text-[14px] font-bold opacity-70">/ 5</span>
+            <span className="text-[14px] font-bold opacity-70">/ {signals.length}</span>
           </div>
         </div>
 

@@ -142,6 +142,39 @@ Deno.serve(async () => {
       } else {
         errors[ticker] = `Parsed ${byEndMonth.size} quarters but no YoY pairs found`;
       }
+
+      // Estimated next earnings date: quarterly filers land ~91 days after
+      // the previous filing. Feeds earnings_calendar so the reasoner knows a
+      // print is coming; a confirmed/manual row is never overwritten.
+      const latestFiled = [...byEndMonth.values()]
+        .map((u) => u.filed)
+        .sort()
+        .pop();
+      if (latestFiled) {
+        const estimate = new Date(Date.parse(latestFiled) + 91 * 86_400_000)
+          .toISOString()
+          .slice(0, 10);
+        if (estimate > now.slice(0, 10)) {
+          const { data: existing } = await supabase
+            .from('earnings_calendar')
+            .select('confirmed, source')
+            .eq('ticker', ticker)
+            .maybeSingle();
+          if (!existing || (!existing.confirmed && existing.source === 'edgar_estimate')) {
+            const { error: calErr } = await supabase.from('earnings_calendar').upsert(
+              {
+                ticker,
+                report_date: estimate,
+                source: 'edgar_estimate',
+                confirmed: false,
+                updated_at: now,
+              },
+              { onConflict: 'ticker' },
+            );
+            if (calErr) errors[`${ticker}_earnings`] = calErr.message;
+          }
+        }
+      }
     }
 
     return new Response(JSON.stringify({ success: true, results, errors }), {

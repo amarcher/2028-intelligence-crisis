@@ -6,7 +6,7 @@ import type { DataPoint, SaaSDataPoint, VerdictType } from './types';
 
 export type SignalState = 'fired' | 'pending';
 
-export type SignalKey = 'jolts' | 'claims' | 'saas' | 'sp500' | 'housing';
+export type SignalKey = 'jolts' | 'claims' | 'saas' | 'sp500' | 'housing' | 'credit';
 
 export interface Signal {
   key: SignalKey;
@@ -25,6 +25,9 @@ export interface SignalsInput {
   sp500: DataPoint[];
   caseShiller: DataPoint[];
   saas: SaaSDataPoint[];
+  /** ICE BofA US High Yield OAS (FRED BAMLH0A0HYM2), daily, in percent.
+   *  Optional so older callers degrade to a pending '—' reading. */
+  hyOas?: DataPoint[];
 }
 
 export interface SignalsResult {
@@ -138,6 +141,31 @@ export function evalSp500(data: DataPoint[]) {
   };
 }
 
+export function evalCredit(data: DataPoint[] | undefined) {
+  // Credit stress (panel decision D9, adapted): high-yield spreads must show a
+  // REAL widening episode — OAS at least 3.5% AND at least 100bps above its
+  // trailing-90-day low — and hold it for 5 consecutive daily prints. The
+  // 5-session persistence requirement is D9's higher bar; the KRE/IYR leg of
+  // D9 lives in the fast layer's creditStress20d momentum (not FRED data).
+  if (!data || data.length === 0) return { fired: false, reading: '—' };
+  const nonNull = data.filter((d) => d.value != null) as Array<{ date: string; value: number }>;
+  if (nonNull.length < 5) return { fired: false, reading: '—' };
+
+  const latest = nonNull[nonNull.length - 1];
+  const cutoff = Date.parse(latest.date) - 90 * 86_400_000;
+  const window = nonNull.filter((d) => Date.parse(d.date) >= cutoff);
+  const low90 = Math.min(...window.map((d) => d.value));
+
+  const stressed = (v: number) => v >= 3.5 && v >= low90 + 1.0;
+  const last5 = nonNull.slice(-5);
+  const fired = last5.every((d) => stressed(d.value));
+
+  return {
+    fired,
+    reading: `OAS ${latest.value.toFixed(2)}% · 90d low ${low90.toFixed(2)}%`,
+  };
+}
+
 export function evalHousing(data: DataPoint[]) {
   // Case-Shiller national YoY turns negative. Proxy for regional roll —
   // SF/Seattle not tracked separately in the dashboard.
@@ -171,6 +199,11 @@ const SIGNAL_META: Record<SignalKey, { label: string; threshold: string; note: s
     threshold: 'S&P 500 hit 7,500+ then no new high for 2 months',
     note: "The bull run is running out of steam — time to start positioning for a downturn",
   },
+  credit: {
+    label: 'BOND MARKET STRESS',
+    threshold: 'junk-bond risk premium ≥ 3.5% and up 1+ point off its 3-month low, 5 days running',
+    note: 'When lenders demand much more to hold risky company debt, credit is drying up — the contagion phase is near',
+  },
   housing: {
     label: 'HOME PRICES FALLING',
     threshold: 'Case-Shiller national down year-over-year',
@@ -191,9 +224,10 @@ export function computeSignals(input: SignalsInput): SignalsResult {
     saas: evalSaas(input.saas),
     sp500: evalSp500(input.sp500),
     housing: evalHousing(input.caseShiller),
+    credit: evalCredit(input.hyOas),
   };
 
-  const order: SignalKey[] = ['jolts', 'claims', 'saas', 'sp500', 'housing'];
+  const order: SignalKey[] = ['jolts', 'claims', 'saas', 'sp500', 'housing', 'credit'];
   const signals: Signal[] = order.map((key) => ({
     key,
     label: SIGNAL_META[key].label,

@@ -13,7 +13,7 @@
 import type { ActiveSleeveSummary, Proposal } from './reasoner.ts';
 
 export interface DigestPayload {
-  tick_type: 'premarket' | 'close' | 'weekly';
+  tick_type: 'premarket' | 'midday' | 'close' | 'weekly';
   phase: 'counterfactual_grind' | 'inflection';
   fired_count: number;
   kill_switch_triggered: boolean;
@@ -37,7 +37,13 @@ function phaseLabel(phase: DigestPayload['phase']): string {
 }
 
 function tickTypeLabel(t: DigestPayload['tick_type']): string {
-  return t === 'premarket' ? 'morning check' : t === 'close' ? 'end-of-day check' : 'weekly review';
+  return t === 'premarket'
+    ? 'morning check'
+    : t === 'midday'
+      ? 'midday check (something moved)'
+      : t === 'close'
+        ? 'end-of-day check'
+        : 'weekly review';
 }
 
 function subject(d: DigestPayload): string {
@@ -50,7 +56,7 @@ function subject(d: DigestPayload): string {
   const phaseShort = d.phase === 'inflection' ? 'Action phase' : 'Waiting phase';
   // Headline is the first sentence of the narrative, capped.
   const firstSentence = d.narrative.split(/(?<=[.!?])\s/)[0].slice(0, 90);
-  return `[2028 Tracker · ${phaseShort} · ${d.fired_count}/5 readings crossed · ${tickTypeLabel(d.tick_type)}] ${firstSentence}`;
+  return `[2028 Tracker · ${phaseShort} · ${d.fired_count}/6 readings crossed · ${tickTypeLabel(d.tick_type)}] ${firstSentence}`;
 }
 
 // ——— markdown body (shared between email + Slack mrkdwn) ———
@@ -141,7 +147,7 @@ function formatActiveSleeve(active: ActiveSleeveSummary | null): string {
 function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
   const header = d.kill_switch_triggered
     ? `🛑 *Abort signal* — the economy is moving the opposite way from what we expected. The agent recommends closing every position.`
-    : `*${phaseLabel(d.phase)}* · ${d.fired_count} of 5 economic readings have crossed the danger line · _${tickTypeLabel(d.tick_type)}_`;
+    : `*${phaseLabel(d.phase)}* · ${d.fired_count} of 6 economic readings have crossed the danger line · _${tickTypeLabel(d.tick_type)}_`;
 
   const drift = d.drift_notes ? `\n\n*This week's economic update:* ${d.drift_notes}` : '';
   const activeSleeve = formatActiveSleeve(d.active_sleeve);
