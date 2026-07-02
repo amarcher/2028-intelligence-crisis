@@ -8,6 +8,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { computeSignals } from '../../../src/lib/signals.ts';
+import { computeProximity, type TriggerProximity } from '../../../src/lib/proximity.ts';
 import type { DataPoint, SaaSDataPoint } from '../../../src/lib/types.ts';
 import {
   runReasoner,
@@ -332,6 +333,31 @@ Deno.serve(async (req: Request) => {
       loadNewsPulse(supabase),
     ]);
 
+    // Trigger Proximity Index (weekly ticks): distance × velocity → ETA per
+    // trigger. THE early-warning read for the "delayed realization" question.
+    let proximity: TriggerProximity[] | undefined;
+    if (tickType === 'weekly') {
+      try {
+        proximity = computeProximity({
+          jolts,
+          claims,
+          caseShiller,
+          hyOas,
+          saas,
+          sp500Fired: result.signals.find((s) => s.key === 'sp500')?.state === 'fired',
+        });
+        const rows = proximity.map((p) => ({
+          key: `proximity_${p.key}`,
+          value: p.etaMonths ?? -1, // -1 = not converging at current pace
+          detail: { current: p.current, progressPct: p.progressPct, note: p.note },
+        }));
+        const { error } = await supabase.from('meta_indices').insert(rows);
+        if (error) console.warn(`proximity meta insert failed: ${error.message}`);
+      } catch (e) {
+        console.warn('computeProximity failed (non-fatal):', String(e).slice(0, 150));
+      }
+    }
+
     // ————— drill mode (M4): synthetic triggers, zero persistence, no orders —————
     if (body.drill && DRILL_LEVELS.has(body.drill)) {
       const { res: drillSignals, kill } = applyDrill(result, body.drill);
@@ -497,6 +523,7 @@ Deno.serve(async (req: Request) => {
       drift_notes: (digestRow.drift_notes as string | null) ?? null,
       active_sleeve: activeSleeve ?? null,
       reasoner_status: String(digestRow.reasoner_status),
+      proximity: proximity ?? null,
     });
     await supabase
       .from('agent_digests')
