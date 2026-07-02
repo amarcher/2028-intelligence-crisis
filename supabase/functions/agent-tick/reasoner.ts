@@ -119,6 +119,11 @@ export interface ActiveSleeveSummary {
     activeSleeveUsedPct: number;
     grossExposureValue: number;
     grossExposurePct: number;
+    /** Net directional exposure with options delta-weighted (puts negative).
+     *  Null when greeks were unavailable this tick. This is the honest
+     *  "how leveraged are we really" number. */
+    netDeltaExposureValue: number | null;
+    netDeltaExposurePct: number | null;
     posture: 'room_to_press' | 'near_limit' | 'over_budget';
   } | null;
   saasRevenueTrend: {
@@ -132,6 +137,11 @@ export interface ActiveSleeveSummary {
     ai20d: number | null;
     saasVsAi20d: number | null;
     creditStress20d: number | null;
+    /** Software-vs-market relative strength: IGV/QQQ price ratio. */
+    igvQqqRatio: number | null;
+    /** True when today's IGV/QQQ ratio is the lowest of the last 60 sessions
+     *  — a fresh relative-strength breakdown in software. */
+    igvQqq60dLow: boolean;
   };
   currentSleeve: {
     saasPutValue: number;
@@ -239,12 +249,25 @@ export type ProposalUrgency =
   | 'this_week'
   | 'waiting_for_trigger';
 
+export type ProposalArchetype = 'core' | 'earnings_window' | 'tactical_inverse';
+
 export interface Proposal {
   action: ProposalAction;
   ticker: string;
   instrument: ProposalInstrument;
   expiry: string | null;
   strike: number | null;
+  /** Short leg strike for put_spread / call_spread. For a put spread this is
+   *  BELOW `strike`; the width defines max payoff. Null for single legs. */
+  strike_short?: number | null;
+  /** Which playbook archetype this trade belongs to. Defaults to 'core'.
+   *  earnings_window and tactical_inverse REQUIRE a time_stop. */
+  archetype?: ProposalArchetype;
+  /** Hard close date (YYYY-MM-DD) enforced by the exit engine — the position
+   *  is force-closed on the first exit-check on/after this date. Required for
+   *  earnings_window (2 trading days after the print) and tactical_inverse
+   *  (5 trading days out). Null = no time stop (core positions). */
+  time_stop?: string | null;
   size_hint: ProposalSizeHint;
   rationale: string;
   /** One concrete sentence on what ends this position — trigger (signal flip,
@@ -434,6 +457,16 @@ How to use them:
 
 Cite shipping evidence in at most one sentence of drift_notes or narrative. Never emit a proposal whose rationale starts with shipping — shipping corroborates drift, it doesn't drive trades. Exception: if 3+ shipping readings all say "counterfactual" for multiple weeks in a row while Phase-Flip signals still show 0 fired, that's a valid reason to trim existing asymmetric exposure further.
 
+## Aggressive paper archetypes (paper mode only)
+
+Beyond the core Phase-1 book, three bounded archetypes are available. Every archetype trade stays inside the normal guardrails and the sleeve budget.
+
+**Earnings-window trade** (\`archetype: 'earnings_window'\`): when a seat-based SaaS name reports within 5–10 days, stance is probe or press, AND the news pulse shows guidance-cut or AI-displacement chatter for that name — a 2–4 month put (or put spread) sized starter. MUST set \`time_stop\` to 2 trading days after the report date. Never hold through the time stop; the exit engine closes it automatically. Do not open one without all three conditions.
+
+**Put spreads** (\`instrument: 'put_spread'\`): defined-risk alternative to naked puts — buy the \`strike\` put, sell the \`strike_short\` put below it (both required, same expiry). Prefer spreads over single puts when the option is expensive (high volatility) or the move you expect is to a level, not to zero. Width 10–20% of the stock price is typical.
+
+**Tactical inverse** (\`archetype: 'tactical_inverse'\`, tickers SQQQ or SPXS only): a 3–5 day bet against the market, allowed ONLY when 2+ readings have crossed OR stance is press with the market breaking down hard. Capped in code at 2% of the account. MUST set \`time_stop\` 5 trading days out and name the tactical window in the rationale. These decay if held — the time stop is not optional.
+
 ## Order lifecycle — how your proposals become trades
 
 Clean proposals emitted while the market is closed (premarket and Monday-morning ticks) are QUEUED and placed automatically shortly after 9:30 ET — they are not lost. The user message includes a "Recent order outcomes" section:
@@ -538,6 +571,22 @@ const TOOL: AnthropicTool = {
               type: ['number', 'null'],
               description:
                 'Numeric strike in USD. Required for option instruments — pick a concrete strike near your target %OTM (round to standard $2.50 / $5 / $10 chain increments). Null only for equity.',
+            },
+            strike_short: {
+              type: ['number', 'null'],
+              description:
+                'Short-leg strike for put_spread/call_spread (below strike for put spreads). Required for spreads, null otherwise.',
+            },
+            archetype: {
+              type: 'string',
+              enum: ['core', 'earnings_window', 'tactical_inverse'],
+              description:
+                "Playbook archetype. 'core' (default) for the standing book; 'earnings_window' and 'tactical_inverse' require time_stop.",
+            },
+            time_stop: {
+              type: ['string', 'null'],
+              description:
+                'Hard close date YYYY-MM-DD, enforced automatically by the exit engine. Required for earnings_window (report + 2 trading days) and tactical_inverse (5 trading days out).',
             },
             size_hint: {
               type: 'string',
@@ -736,12 +785,12 @@ function renderActiveSleeve(active: ActiveSleeveSummary | undefined): string {
     ? `Performance: equity $${perf.equity.toFixed(0)} · cash $${perf.cash.toFixed(0)} · today ${perf.dayProfitLoss >= 0 ? '+' : ''}$${perf.dayProfitLoss.toFixed(0)} (${fmtPctOrDash(perf.dayProfitLossPct)})`
     : 'Performance: not available';
   const riskLine = risk
-    ? `Risk budget: posture ${risk.posture} · active sleeve used $${risk.activeSleeveUsedValue.toFixed(0)} of $${risk.activeSleeveBudgetValue.toFixed(0)} (${risk.activeSleeveUsedPct.toFixed(1)}% used) · room $${risk.activeSleeveRoomValue.toFixed(0)} · gross exposure ${risk.grossExposurePct.toFixed(1)}% of equity`
+    ? `Risk budget: posture ${risk.posture} · active sleeve used $${risk.activeSleeveUsedValue.toFixed(0)} of $${risk.activeSleeveBudgetValue.toFixed(0)} (${risk.activeSleeveUsedPct.toFixed(1)}% used) · room $${risk.activeSleeveRoomValue.toFixed(0)} · gross exposure ${risk.grossExposurePct.toFixed(1)}% of equity${risk.netDeltaExposurePct != null ? ` · net market exposure (delta-adjusted) ${risk.netDeltaExposurePct >= 0 ? '+' : ''}${risk.netDeltaExposurePct.toFixed(1)}% of equity` : ''}`
     : 'Risk budget: not available';
 
   return `stance ${active.stance} · score ${active.score}/100
 SaaS revenue trend: latest avg ${fmtPctOrDash(trend.latestAvg)} · prior avg ${fmtPctOrDash(trend.priorAvg)} · change ${fmtPctOrDash(trend.delta)} · weakening names ${trend.deterioratingTickers.join(', ') || 'none'}
-Market momentum: SaaS 20d ${fmtPctOrDash(momentum.saas20d)} · AI winners 20d ${fmtPctOrDash(momentum.ai20d)} · SaaS minus AI ${fmtPctOrDash(momentum.saasVsAi20d)} · credit stress proxy ${fmtPctOrDash(momentum.creditStress20d)}
+Market momentum: SaaS 20d ${fmtPctOrDash(momentum.saas20d)} · AI winners 20d ${fmtPctOrDash(momentum.ai20d)} · SaaS minus AI ${fmtPctOrDash(momentum.saasVsAi20d)} · credit stress proxy ${fmtPctOrDash(momentum.creditStress20d)}${momentum.igvQqqRatio != null ? ` · software-vs-market ratio ${momentum.igvQqqRatio.toFixed(3)}${momentum.igvQqq60dLow ? ' (FRESH 60-day LOW — software breaking down vs the market)' : ''}` : ''}
 ${performanceLine}
 ${riskLine}
 ${sleeveLine}

@@ -123,7 +123,10 @@ function formatActiveSleeve(active: ActiveSleeveSummary | null): string {
   if (risk) {
     lines.push(
       `Risk room: ${risk.posture.replace(/_/g, ' ')} · ${fmtUsd(risk.activeSleeveRoomValue)} active room ` +
-        `(${risk.activeSleeveUsedPct.toFixed(0)}% of ${risk.activeSleeveBudgetPct}% sleeve used) · gross exposure ${fmtPct(risk.grossExposurePct)}`,
+        `(${risk.activeSleeveUsedPct.toFixed(0)}% of ${risk.activeSleeveBudgetPct}% sleeve used) · gross exposure ${fmtPct(risk.grossExposurePct)}` +
+        (risk.netDeltaExposurePct != null
+          ? ` · net market exposure ${fmtPct(risk.netDeltaExposurePct)} of the account (options counted by how much they actually move)`
+          : ''),
     );
   }
   if (perf) {

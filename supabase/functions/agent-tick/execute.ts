@@ -25,6 +25,7 @@ import {
   getOptionsChain,
   getPositions,
   placeOrder,
+  placeSpreadOrder,
   type AlpacaCredentials,
   type AlpacaAccount,
   type AlpacaOrder,
@@ -48,6 +49,38 @@ export interface ExecutionSupabase {
   todayOrders(): Promise<PriorOrderSummary[]>;
   replacePositionsCache(positions: AlpacaPosition[]): Promise<void>;
   priorDigests(limit: number): Promise<Array<{ fired_count: number }>>;
+  /** Upsert an exit rule for a just-opened position (archetype/time_stop). */
+  upsertPositionRule(row: PositionRuleUpsert): Promise<void>;
+}
+
+export interface PositionRuleUpsert {
+  option_symbol: string; // OCC for options; bare ticker for equity tacticals
+  ticker: string;
+  archetype: string;
+  force_close_date: string | null;
+}
+
+/** Persist archetype/time-stop exit rules for archetype trades so the exit
+ *  engine can enforce them. Core positions without a time stop skip this —
+ *  they get default rules from the exit engine on first sight. */
+async function maybeUpsertRule(
+  supa: ExecutionSupabase,
+  p: Proposal,
+  keySymbol: string,
+): Promise<void> {
+  const archetype = p.archetype ?? 'core';
+  if (!p.time_stop && archetype === 'core') return;
+  if (p.action !== 'open' && p.action !== 'add') return;
+  try {
+    await supa.upsertPositionRule({
+      option_symbol: keySymbol,
+      ticker: p.ticker,
+      archetype,
+      force_close_date: p.time_stop ?? null,
+    });
+  } catch (e) {
+    console.warn(`rule upsert ${keySymbol} failed (non-fatal):`, String(e).slice(0, 150));
+  }
 }
 
 export interface AgentOrderRow {
@@ -232,23 +265,6 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     if (p.action === 'hold') continue;
     if (p.action === 'unwind_all') continue; // already handled above as approval
 
-    // Spreads — not yet supported at the execution layer
-    if (p.instrument === 'put_spread' || p.instrument === 'call_spread') {
-      await input.supa.insertOrder({
-        digest_id: input.digestId,
-        ticker: p.ticker,
-        instrument: p.instrument,
-        side: p.action === 'add' || p.action === 'open' ? 'buy' : 'sell',
-        qty: 0,
-        order_type: 'market',
-        notional_usd: null,
-        status: 'rejected',
-        rejection_reason: 'spreads not yet supported by execute.ts — pending multi-leg support',
-      });
-      rejected++;
-      continue;
-    }
-
     const decision = validateTrade(p, ctx);
 
     if (decision.outcome === 'deferred') {
@@ -320,6 +336,62 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     // ————— place the order —————
 
     const side = sideFromAction(p.action);
+
+    // Multi-leg spreads take their own path (mleg order, both legs resolved).
+    if (p.instrument === 'put_spread' || p.instrument === 'call_spread') {
+      const res = await executeSpreadProposal(
+        creds, p, decision.notional, positions, `${input.digestId.slice(0, 8)}-${i}`,
+      );
+      if (!res.ok) {
+        await input.supa.insertOrder({
+          digest_id: input.digestId,
+          ticker: p.ticker,
+          instrument: p.instrument,
+          side,
+          qty: 0,
+          order_type: 'limit',
+          notional_usd: null,
+          status: 'rejected',
+          rejection_reason: res.reason,
+        });
+        rejected++;
+        continue;
+      }
+      await input.supa.insertOrder({
+        digest_id: input.digestId,
+        ticker: p.ticker,
+        instrument: p.instrument,
+        option_symbol: res.longSymbol,
+        side,
+        qty: res.qty,
+        order_type: 'limit',
+        limit_price: res.limitPrice,
+        notional_usd: decision.notional,
+        status: 'submitted',
+        alpaca_order_id: res.order.id,
+        submitted_at: res.order.submitted_at,
+        raw_alpaca: res.order,
+      });
+      await maybeUpsertRule(input.supa, p, res.longSymbol);
+      const alertRes = await sendTradeAlert({
+        action: p.action,
+        side,
+        ticker: p.ticker,
+        instrument: p.instrument,
+        option_symbol: `${res.longSymbol} / ${res.shortSymbol}`,
+        expiry: p.expiry,
+        strike: p.strike,
+        qty: res.qty,
+        notional_usd: decision.notional,
+        rationale: p.rationale,
+        exit_condition: p.exit_condition,
+        alpaca_order_id: res.order.id,
+      });
+      if (!alertRes.ok) errors.push(`trade alert ${p.ticker}: ${alertRes.error ?? 'unknown'}`);
+      placed++;
+      continue;
+    }
+
     const plan = await buildOrderPlan(creds, p, decision.notional, positions);
     if (!plan.ok) {
       errors.push(`order plan ${p.ticker}: ${plan.reason}`);
@@ -365,6 +437,7 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
         submitted_at: orderRes.submitted_at,
         raw_alpaca: orderRes,
       });
+      await maybeUpsertRule(input.supa, p, optionSymbol ?? p.ticker);
       // Per-trade Slack/email alert — fire-and-forget. Never blocks execution;
       // failure just adds a non-fatal entry to errors[] so the tick keeps going.
       const alertRes = await sendTradeAlert({
@@ -532,32 +605,30 @@ interface ResolvedOption {
   close_price: number | undefined;
 }
 
-async function resolveOptionSymbol(
+/** Resolve one listed contract nearest a target strike. */
+async function resolveContract(
   c: AlpacaCredentials,
-  p: Proposal,
+  ticker: string,
+  type: 'put' | 'call',
+  expiry: string,
+  strike: number,
 ): Promise<ResolvedOption | null> {
-  if (p.instrument !== 'put' && p.instrument !== 'call') return null;
-  if (!p.expiry || p.strike == null) return null;
-
-  const [gte, lte] = expiryToDateRange(p.expiry);
+  const [gte, lte] = expiryToDateRange(expiry);
   if (!gte || !lte) return null;
 
-  const chain = await getOptionsChain(c, p.ticker, {
-    type: p.instrument,
+  const chain = await getOptionsChain(c, ticker, {
+    type,
     expiration_date_gte: gte,
     expiration_date_lte: lte,
-    strike_price_gte: p.strike * 0.95,
-    strike_price_lte: p.strike * 1.05,
+    strike_price_gte: strike * 0.95,
+    strike_price_lte: strike * 1.05,
     limit: 20,
   });
   if (chain.length === 0) return null;
 
-  // Pick the contract with strike closest to proposal.strike.
-  const sorted = [...chain].sort((a, b) => {
-    const da = Math.abs(a.strike_price - (p.strike as number));
-    const db = Math.abs(b.strike_price - (p.strike as number));
-    return da - db;
-  });
+  const sorted = [...chain].sort(
+    (a, b) => Math.abs(a.strike_price - strike) - Math.abs(b.strike_price - strike),
+  );
   const best = sorted[0];
   return {
     symbol: best.symbol,
@@ -565,6 +636,137 @@ async function resolveOptionSymbol(
     expiration_date: best.expiration_date,
     close_price: best.close_price,
   };
+}
+
+async function resolveOptionSymbol(
+  c: AlpacaCredentials,
+  p: Proposal,
+): Promise<ResolvedOption | null> {
+  if (p.instrument !== 'put' && p.instrument !== 'call') return null;
+  if (!p.expiry || p.strike == null) return null;
+  return resolveContract(c, p.ticker, p.instrument, p.expiry, p.strike);
+}
+
+// ————— spreads (mleg) —————
+
+export type SpreadResult =
+  | {
+      ok: true;
+      order: AlpacaOrder;
+      qty: number;
+      longSymbol: string;
+      shortSymbol: string;
+      limitPrice: number;
+    }
+  | { ok: false; reason: string };
+
+function spreadOptionType(instrument: Proposal['instrument']): 'put' | 'call' | null {
+  if (instrument === 'put_spread') return 'put';
+  if (instrument === 'call_spread') return 'call';
+  return null;
+}
+
+/** Open or close a defined-risk two-leg spread via an mleg limit order.
+ *  Opens: buy `strike`, sell `strike_short`, net-debit limit from quotes.
+ *  Closes: unwind the existing long/short pair on the underlying. */
+export async function executeSpreadProposal(
+  creds: AlpacaCredentials,
+  p: Proposal,
+  notional: number,
+  positions: AlpacaPosition[],
+  clientOrderId: string,
+): Promise<SpreadResult> {
+  const type = spreadOptionType(p.instrument);
+  if (!type) return { ok: false, reason: `not a spread instrument: ${p.instrument}` };
+
+  if (p.action === 'open' || p.action === 'add') {
+    if (!p.expiry || p.strike == null || p.strike_short == null) {
+      return { ok: false, reason: 'spread open requires expiry, strike, and strike_short' };
+    }
+    const [longLeg, shortLeg] = await Promise.all([
+      resolveContract(creds, p.ticker, type, p.expiry, p.strike),
+      resolveContract(creds, p.ticker, type, p.expiry, p.strike_short),
+    ]);
+    if (!longLeg || !shortLeg) {
+      return { ok: false, reason: `could not resolve both spread legs for ${p.ticker} ${p.expiry}` };
+    }
+    if (longLeg.symbol === shortLeg.symbol) {
+      return { ok: false, reason: 'spread legs resolved to the same contract — widen the strikes' };
+    }
+
+    // Net-debit limit from NBBO: long ask − short bid, padded 5%. Fall back
+    // to close prices when quotes are missing (limit still bounds the damage).
+    const quotes = await getLatestOptionQuotes(creds, [longLeg.symbol, shortLeg.symbol]).catch(
+      () => new Map<string, { bid: number; ask: number }>(),
+    );
+    const lq = quotes.get(longLeg.symbol);
+    const sq = quotes.get(shortLeg.symbol);
+    let netDebit: number | null = null;
+    if (lq && sq && lq.ask > 0) {
+      netDebit = lq.ask - sq.bid;
+    } else if (longLeg.close_price != null && shortLeg.close_price != null) {
+      netDebit = (longLeg.close_price - shortLeg.close_price) * 1.10;
+    }
+    if (netDebit == null || netDebit <= 0) {
+      return { ok: false, reason: `could not price the ${p.ticker} spread (no quotes/closes)` };
+    }
+    const limitPrice = Math.max(0.05, Math.round(netDebit * 1.05 * 20) / 20);
+    const qty = Math.max(1, Math.round(notional / (limitPrice * 100)));
+
+    try {
+      const order = await placeSpreadOrder(creds, {
+        legs: [
+          { symbol: longLeg.symbol, side: 'buy', position_intent: 'buy_to_open' },
+          { symbol: shortLeg.symbol, side: 'sell', position_intent: 'sell_to_open' },
+        ],
+        qty,
+        limitPrice,
+        clientOrderId,
+      });
+      return { ok: true, order, qty, longSymbol: longLeg.symbol, shortSymbol: shortLeg.symbol, limitPrice };
+    } catch (e) {
+      return { ok: false, reason: `mleg placeOrder threw: ${String(e).slice(0, 250)}` };
+    }
+  }
+
+  // close / trim: find the live pair on this underlying + type.
+  const legs = positions.filter((pos) => {
+    if (pos.asset_class !== 'us_option') return false;
+    const m = pos.symbol.match(/^([A-Z]{1,6})\d{6}([CP])/);
+    return m?.[1] === p.ticker && m?.[2] === (type === 'put' ? 'P' : 'C');
+  });
+  const longPos = legs.find((l) => l.qty > 0);
+  const shortPos = legs.find((l) => l.qty < 0);
+  if (!longPos || !shortPos) {
+    return { ok: false, reason: `no open ${p.ticker} spread pair found to ${p.action}` };
+  }
+  const pairQty = Math.min(Math.abs(longPos.qty), Math.abs(shortPos.qty));
+  const qty = p.action === 'trim' ? Math.max(1, Math.floor(pairQty / 3)) : pairQty;
+
+  const quotes = await getLatestOptionQuotes(creds, [longPos.symbol, shortPos.symbol]).catch(
+    () => new Map<string, { bid: number; ask: number }>(),
+  );
+  const lq = quotes.get(longPos.symbol);
+  const sq = quotes.get(shortPos.symbol);
+  // Closing credit: long bid − short ask, padded down 5%. Floor at 0.01 —
+  // Alpaca requires a positive limit on mleg orders.
+  const netCredit = lq && sq ? lq.bid - sq.ask : null;
+  const limitPrice = Math.max(0.01, Math.round((netCredit ?? 0.05) * 0.95 * 20) / 20);
+
+  try {
+    const order = await placeSpreadOrder(creds, {
+      legs: [
+        { symbol: longPos.symbol, side: 'sell', position_intent: 'sell_to_close' },
+        { symbol: shortPos.symbol, side: 'buy', position_intent: 'buy_to_close' },
+      ],
+      qty,
+      limitPrice,
+      clientOrderId,
+    });
+    return { ok: true, order, qty, longSymbol: longPos.symbol, shortSymbol: shortPos.symbol, limitPrice };
+  } catch (e) {
+    return { ok: false, reason: `mleg close threw: ${String(e).slice(0, 250)}` };
+  }
 }
 
 /** "Jan 2027" → ['2027-01-01', '2027-01-31']. */

@@ -33,6 +33,7 @@ import {
   getAccount,
   getDailyBars,
   getLatestTrades,
+  getOptionSnapshots,
   getOptionsChain,
   getPositions,
   type AlpacaAccount,
@@ -249,6 +250,10 @@ Deno.serve(async (req: Request) => {
         ]);
         optionChains = chains;
         const priorTai = await loadPriorTai(supabase);
+        const netDelta = await computeNetDeltaExposure(creds, pos, tapeByTicker).catch((e) => {
+          console.warn('delta exposure failed (non-fatal):', String(e).slice(0, 150));
+          return null;
+        });
         activeSleeve = buildActiveSleeveSummary({
           account: acct,
           saas,
@@ -258,6 +263,7 @@ Deno.serve(async (req: Request) => {
           budgetPct: Number(config.active_sleeve_budget_pct ?? 50),
           priorScore: priorTai?.score ?? null,
           priorStance: priorTai?.stance ?? null,
+          netDeltaExposureValue: netDelta,
         });
 
         // ————— measurement layer (M0) —————
@@ -716,6 +722,8 @@ function buildActiveSleeveSummary(input: {
   /** Prior smoothed TAI score/stance from meta_indices, for EMA + hysteresis. */
   priorScore: number | null;
   priorStance: SleeveStance | null;
+  /** Net delta-adjusted directional exposure in USD (null = greeks missing). */
+  netDeltaExposureValue: number | null;
 }): ActiveSleeveSummary {
   const latest = latestSaasRow(input.saas);
   const prior = latest ? priorSaasRow(input.saas, latest.date) : null;
@@ -739,6 +747,26 @@ function buildActiveSleeveSummary(input: {
   const ai20d = avgNonNull(AI_WINNER_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
   const creditStress20d = avgNonNull(CREDIT_STRESS_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
   const saasVsAi20d = saas20d != null && ai20d != null ? saas20d - ai20d : null;
+
+  // Software-vs-market relative strength: IGV/QQQ daily close ratio over the
+  // bar window. A fresh 60-session low = software breaking down vs the market.
+  let igvQqqRatio: number | null = null;
+  let igvQqq60dLow = false;
+  const igvBars = input.bars.get('IGV');
+  const qqqBars = input.bars.get('QQQ');
+  if (igvBars && qqqBars && igvBars.length > 5) {
+    const qqqByDate = new Map(qqqBars.map((b) => [b.asOf.slice(0, 10), b.close] as const));
+    const ratios: number[] = [];
+    for (const b of igvBars) {
+      const q = qqqByDate.get(b.asOf.slice(0, 10));
+      if (q && q > 0) ratios.push(b.close / q);
+    }
+    if (ratios.length > 5) {
+      igvQqqRatio = ratios[ratios.length - 1];
+      const window = ratios.slice(-60);
+      igvQqq60dLow = igvQqqRatio <= Math.min(...window);
+    }
+  }
 
   const sleeveTotals = input.positions.reduce(
     (acc, p) => {
@@ -785,6 +813,10 @@ function buildActiveSleeveSummary(input: {
       : activeSleeveUsedPct >= 80
         ? 'near_limit'
         : 'room_to_press';
+  const netDeltaExposurePct =
+    input.netDeltaExposureValue != null && input.account.equity > 0
+      ? (input.netDeltaExposureValue / input.account.equity) * 100
+      : null;
   const dayProfitLoss = input.account.equity - input.account.last_equity;
   const dayProfitLossPct = input.account.last_equity > 0
     ? (dayProfitLoss / input.account.last_equity) * 100
@@ -821,6 +853,9 @@ function buildActiveSleeveSummary(input: {
     score += 10;
     reasons.push('AI/knowledge-work winners are still positive while SaaS lags, matching the modified prediction.');
   }
+  if (igvQqq60dLow) {
+    reasons.push('Software just hit a fresh 3-month low relative to the broader market — a new leg down in the software-vs-market ratio.');
+  }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
   // EMA smoothing (α=0.5 against the prior persisted score) + hysteresis on
@@ -851,6 +886,8 @@ function buildActiveSleeveSummary(input: {
       activeSleeveUsedPct,
       grossExposureValue,
       grossExposurePct,
+      netDeltaExposureValue: input.netDeltaExposureValue,
+      netDeltaExposurePct,
       posture,
     },
     saasRevenueTrend: {
@@ -864,9 +901,40 @@ function buildActiveSleeveSummary(input: {
       ai20d,
       saasVsAi20d,
       creditStress20d,
+      igvQqqRatio,
+      igvQqq60dLow,
     },
     currentSleeve,
   };
+}
+
+/** Net delta-adjusted directional exposure in USD: equities at market value
+ *  (signed), options at delta × 100 × qty × underlying spot. Returns null
+ *  when no positions have usable greeks — better honest-missing than wrong. */
+async function computeNetDeltaExposure(
+  creds: AlpacaCredentials,
+  positions: AlpacaPosition[],
+  tapeByTicker: Map<string, number>,
+): Promise<number | null> {
+  let total = 0;
+  const optionPositions = positions.filter((p) => p.asset_class === 'us_option');
+  for (const p of positions) {
+    if (p.asset_class !== 'us_option') total += p.market_value;
+  }
+  if (optionPositions.length === 0) return total;
+
+  const snapshots = await getOptionSnapshots(creds, optionPositions.map((p) => p.symbol));
+  let greeksSeen = 0;
+  for (const p of optionPositions) {
+    const delta = snapshots.get(p.symbol)?.delta;
+    if (delta == null) continue;
+    const underlying = p.symbol.match(/^([A-Z]{1,6})/)?.[1] ?? '';
+    const spot = tapeByTicker.get(underlying);
+    if (!spot) continue;
+    greeksSeen++;
+    total += delta * 100 * p.qty * spot;
+  }
+  return greeksSeen > 0 ? total : null;
 }
 
 // ————— measurement layer (M0) —————
@@ -927,6 +995,12 @@ async function writeMeasurement(
     });
   }
   if (risk) rows.push({ key: 'gross_exposure_pct', value: risk.grossExposurePct });
+  if (risk?.netDeltaExposurePct != null) {
+    rows.push({ key: 'net_delta_exposure_pct', value: risk.netDeltaExposurePct });
+  }
+  if (m.igvQqqRatio != null) {
+    rows.push({ key: 'igv_qqq_ratio', value: m.igvQqqRatio, detail: { is60dLow: m.igvQqq60dLow } });
+  }
   // Regime disagreement: fast-layer conviction vs slow-macro confirmation.
   // High = market pricing the thesis before the macro readings confirm it.
   rows.push({ key: 'regime_disagreement', value: Math.abs(activeSleeve.score - firedCount * 20) });
@@ -1111,6 +1185,18 @@ function buildExecutionSupa(
       if (error) return [];
       // First row is the current tick's digest; skip it.
       return (data ?? []).slice(1) as Array<{ fired_count: number }>;
+    },
+    async upsertPositionRule(row) {
+      const { error } = await supabase.from('agent_position_rules').upsert(
+        {
+          option_symbol: row.option_symbol,
+          ticker: row.ticker,
+          archetype: row.archetype,
+          force_close_date: row.force_close_date,
+        },
+        { onConflict: 'option_symbol' },
+      );
+      if (error) console.warn(`position rule upsert failed: ${error.message}`);
     },
   };
 }
