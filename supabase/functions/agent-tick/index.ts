@@ -143,7 +143,7 @@ Deno.serve(async (req: Request) => {
   try {
     const { data: config } = await supabase
       .from('agent_config')
-      .select('enabled, mode, phase, paper_mode, halted, halt_reason')
+      .select('enabled, mode, phase, paper_mode, halted, halt_reason, active_sleeve_budget_pct')
       .eq('id', 1)
       .single();
 
@@ -239,12 +239,16 @@ Deno.serve(async (req: Request) => {
           }),
         ]);
         optionChains = chains;
+        const priorTai = await loadPriorTai(supabase);
         activeSleeve = buildActiveSleeveSummary({
           account: acct,
           saas,
           positions: pos,
           bars,
           drift,
+          budgetPct: Number(config.active_sleeve_budget_pct ?? 50),
+          priorScore: priorTai?.score ?? null,
+          priorStance: priorTai?.stance ?? null,
         });
 
         // ————— measurement layer (M0) —————
@@ -640,12 +644,63 @@ function priorSaasRow(saas: SaaSDataPoint[], latestDate: string): SaaSDataPoint 
   return null;
 }
 
+type SleeveStance = ActiveSleeveSummary['stance'];
+
+const STANCE_ENTER = { press: 70, probe: 50, watch: 25 } as const;
+const STANCE_EXIT = { press: 55, probe: 35, watch: 15 } as const;
+const STANCE_RANK: Record<SleeveStance, number> = { inactive: 0, watch: 1, probe: 2, press: 3 };
+
+/** Stance with hysteresis: entering a stance takes the ENTER threshold, but
+ *  once in it, you stay until the score drops below the (lower) EXIT
+ *  threshold. Kills the watch→press→watch flapping the raw 40-point cliff
+ *  jumps in the score components produced day to day. */
+function stanceWithHysteresis(score: number, prior: SleeveStance | null): SleeveStance {
+  const computed: SleeveStance =
+    score >= STANCE_ENTER.press ? 'press'
+    : score >= STANCE_ENTER.probe ? 'probe'
+    : score >= STANCE_ENTER.watch ? 'watch'
+    : 'inactive';
+  if (prior && STANCE_RANK[computed] < STANCE_RANK[prior]) {
+    const exitThreshold =
+      prior === 'press' ? STANCE_EXIT.press
+      : prior === 'probe' ? STANCE_EXIT.probe
+      : STANCE_EXIT.watch;
+    if (score >= exitThreshold) return prior; // hold the prior stance
+  }
+  return computed;
+}
+
+/** Latest persisted TAI reading (smoothed score + stance) for hysteresis. */
+async function loadPriorTai(
+  supabase: ReturnType<typeof createClient>,
+): Promise<{ score: number; stance: SleeveStance } | null> {
+  const { data, error } = await supabase
+    .from('meta_indices')
+    .select('value, detail')
+    .eq('key', 'tai')
+    .order('observed_at', { ascending: false })
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  const row = data[0] as { value: number; detail: { stance?: string } | null };
+  const stance = row.detail?.stance;
+  const valid: SleeveStance[] = ['inactive', 'watch', 'probe', 'press'];
+  return {
+    score: Number(row.value),
+    stance: valid.includes(stance as SleeveStance) ? (stance as SleeveStance) : 'inactive',
+  };
+}
+
 function buildActiveSleeveSummary(input: {
   account: AlpacaAccount;
   saas: SaaSDataPoint[];
   positions: AlpacaPosition[];
   bars: Map<string, DailyBar[]>;
   drift: DriftSummary;
+  /** Sleeve budget as % of equity (agent_config.active_sleeve_budget_pct). */
+  budgetPct: number;
+  /** Prior smoothed TAI score/stance from meta_indices, for EMA + hysteresis. */
+  priorScore: number | null;
+  priorStance: SleeveStance | null;
 }): ActiveSleeveSummary {
   const latest = latestSaasRow(input.saas);
   const prior = latest ? priorSaasRow(input.saas, latest.date) : null;
@@ -688,18 +743,21 @@ function buildActiveSleeveSummary(input: {
     },
     { saasPutValue: 0, saasPutProfitLoss: 0, aiLongValue: 0, defensiveValue: 0 },
   );
-  const addCapacityValue =
-    sleeveTotals.aiLongValue + sleeveTotals.defensiveValue - sleeveTotals.saasPutValue;
+  const grossExposureValue = input.positions.reduce((sum, p) => sum + Math.abs(p.market_value), 0);
+  const activeSleeveUsedValue = sleeveTotals.saasPutValue;
+  const activeSleeveBudgetPct = input.budgetPct;
+  const activeSleeveBudgetValue = input.account.equity * (activeSleeveBudgetPct / 100);
+  const activeSleeveRoomValue = activeSleeveBudgetValue - activeSleeveUsedValue;
+  // Add capacity IS the budget room. The old rule (SaaS puts may not exceed
+  // AI longs + defensives) was a balance-sheet symmetry constraint that
+  // mechanically forbade pressing exactly when the puts were winning —
+  // retired per roadmap M1. The vol/risk gate is the sleeve budget.
+  const addCapacityValue = activeSleeveRoomValue;
   const currentSleeve = {
     ...sleeveTotals,
     addAllowed: addCapacityValue > 0,
     addCapacityValue,
   };
-  const grossExposureValue = input.positions.reduce((sum, p) => sum + Math.abs(p.market_value), 0);
-  const activeSleeveUsedValue = sleeveTotals.saasPutValue;
-  const activeSleeveBudgetPct = 20;
-  const activeSleeveBudgetValue = input.account.equity * (activeSleeveBudgetPct / 100);
-  const activeSleeveRoomValue = activeSleeveBudgetValue - activeSleeveUsedValue;
   const activeSleeveUsedPct = activeSleeveBudgetValue > 0
     ? (activeSleeveUsedValue / activeSleeveBudgetValue) * 100
     : 0;
@@ -750,8 +808,15 @@ function buildActiveSleeveSummary(input: {
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
-  const stance: ActiveSleeveSummary['stance'] =
-    score >= 70 ? 'press' : score >= 50 ? 'probe' : score >= 25 ? 'watch' : 'inactive';
+  // EMA smoothing (α=0.5 against the prior persisted score) + hysteresis on
+  // the stance transition. Raw component scores jump in 40-point cliffs when
+  // a momentum reading crosses a threshold; acting on the raw number produced
+  // watch→press→watch flapping across consecutive ticks.
+  const smoothed = input.priorScore == null
+    ? score
+    : Math.max(0, Math.min(100, Math.round(0.5 * input.priorScore + 0.5 * score)));
+  const stance = stanceWithHysteresis(smoothed, input.priorStance);
+  score = smoothed;
 
   return {
     score,

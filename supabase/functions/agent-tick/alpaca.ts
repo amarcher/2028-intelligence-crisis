@@ -304,6 +304,34 @@ export async function getDailyBars(
   return out;
 }
 
+export interface OptionQuote {
+  symbol: string;   // OCC
+  bid: number;
+  ask: number;
+  asOf: string;
+}
+
+/** Latest NBBO quotes for option contracts — used to price marketable limit
+ *  orders instead of firing market orders into wide LEAPS spreads. Missing
+ *  symbols are absent from the result; callers fall back to market orders. */
+export async function getLatestOptionQuotes(
+  c: AlpacaCredentials,
+  occSymbols: readonly string[],
+): Promise<Map<string, OptionQuote>> {
+  const out = new Map<string, OptionQuote>();
+  if (occSymbols.length === 0) return out;
+  const qs = new URLSearchParams({ symbols: occSymbols.join(',') });
+  const raw = await req<{ quotes: Record<string, { bp: number; ap: number; t: string }> }>(
+    c, 'GET', DATA_BASE, `/v1beta1/options/quotes/latest?${qs.toString()}`,
+  );
+  for (const [symbol, q] of Object.entries(raw.quotes ?? {})) {
+    if (q && typeof q.ap === 'number' && q.ap > 0) {
+      out.set(symbol, { symbol, bid: Number(q.bp) || 0, ask: q.ap, asOf: String(q.t) });
+    }
+  }
+  return out;
+}
+
 // ————— options data (minimal — used by reasoner for chain awareness) —————
 
 export interface OptionContract {

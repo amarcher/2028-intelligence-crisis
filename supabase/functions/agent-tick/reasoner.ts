@@ -321,7 +321,7 @@ Keep the slow setup. Hold long-dated SaaS puts on NOW/CRM/HUBS/WDAY (seat-based 
 
 Modified-thesis active sleeve in Phase 1:
 - The active sleeve can add or rotate small SaaS put exposure before the macro phase flips, but only when the "Modified-thesis active sleeve" block says stance = probe or press.
-- Prefer rotating within SaaS puts over adding gross exposure when SaaS put exposure is already larger than AI longs plus defensive positions.
+- The sizing gate is the sleeve BUDGET (a % of account equity, shown in the risk-budget line). When budget room exists and the stance says act, act; when it doesn't, rotate within SaaS instead of adding.
 - Prefer names with both weak stock momentum and weakening software-revenue growth.
 - Do not close AI longs merely because SaaS is weak. Close or trim AI longs only when broad macro readings start breaking, VIX is rising sharply, or the active summary shows AI momentum has also turned down.
 - If active stance = inactive or watch, holding is usually correct unless there is a sizing or expiry hygiene problem.
@@ -371,11 +371,11 @@ Each tick receives week-over-week deltas for JOLTS, claims, S&P 500, and Case-Sh
 
 When present, the user message includes a "Modified-thesis active sleeve" block. This block is the fast layer. It does NOT replace the five slow macro readings and it does NOT move the system to the Action phase. It answers a narrower question: "Is SaaS being repriced as agent-vulnerable while AI/knowledge-work winners still hold up?"
 
-Use the active stance this way:
-- inactive (0–24): do not add active risk.
-- watch (25–49): name what would make you act, but usually hold.
-- probe (50–69): one small SaaS put add or one rotation is allowed in paper mode, especially if current SaaS put exposure is not already oversized.
-- press (70–100): up to two SaaS put adds/rotations are allowed in paper mode, still within guardrails. Do not broaden to SPY/QQQ/credit shorts unless the slow macro phase also flips.
+Use the active stance this way (the stance is computed with smoothing and stickiness — it only changes when the score moves decisively, so trust the provided stance over re-deriving it from the number):
+- inactive: do not add active risk.
+- watch: name what would make you act, but usually hold.
+- probe: one small SaaS put add or one rotation is allowed in paper mode.
+- press: up to two SaaS put adds/rotations are allowed in paper mode, still within guardrails. Do not broaden to SPY/QQQ/credit shorts unless the slow macro phase also flips.
 
 If stance = probe or press and the account already has the starter book, do not default to a bare hold. Emit at least one concrete SaaS put add or rotation when Current sleeve says "add allowed: yes." If it says "add allowed: no," do not add gross exposure; rotate within SaaS only if there is an obvious weaker target. Do not recompute the exposure test yourself — use the provided yes/no flag.
 
@@ -676,7 +676,7 @@ function renderActiveSleeve(active: ActiveSleeveSummary | undefined): string {
     ? active.reasons.map((r) => `  - ${r}`).join('\n')
     : '  - No strong fast-layer evidence.';
   const sleeveLine = sleeve
-    ? `Current sleeve: SaaS puts $${sleeve.saasPutValue.toFixed(0)} (${sleeve.saasPutProfitLoss >= 0 ? '+' : ''}$${sleeve.saasPutProfitLoss.toFixed(0)} profit/loss) · AI longs $${sleeve.aiLongValue.toFixed(0)} · safe-haven $${sleeve.defensiveValue.toFixed(0)} · add allowed: ${sleeve.addAllowed ? 'yes' : 'no'} (${sleeve.addCapacityValue >= 0 ? '$' : '-$'}${Math.abs(sleeve.addCapacityValue).toFixed(0)} before SaaS puts exceed AI + safe-haven)`
+    ? `Current sleeve: SaaS puts $${sleeve.saasPutValue.toFixed(0)} (${sleeve.saasPutProfitLoss >= 0 ? '+' : ''}$${sleeve.saasPutProfitLoss.toFixed(0)} profit/loss) · AI longs $${sleeve.aiLongValue.toFixed(0)} · safe-haven $${sleeve.defensiveValue.toFixed(0)} · add allowed: ${sleeve.addAllowed ? 'yes' : 'no'} (${sleeve.addCapacityValue >= 0 ? '$' : '-$'}${Math.abs(sleeve.addCapacityValue).toFixed(0)} of sleeve budget remaining)`
     : 'Current sleeve: not available';
   const performanceLine = perf
     ? `Performance: equity $${perf.equity.toFixed(0)} · cash $${perf.cash.toFixed(0)} · today ${perf.dayProfitLoss >= 0 ? '+' : ''}$${perf.dayProfitLoss.toFixed(0)} (${fmtPctOrDash(perf.dayProfitLossPct)})`

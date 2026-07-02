@@ -18,10 +18,9 @@ import {
   alpacaFromEnv,
   getAccount,
   getPositions,
-  placeOrder,
 } from '../agent-tick/alpaca.ts';
 import { validateTrade, type GuardrailContext, type PriorOrderSummary } from '../agent-tick/guardrails.ts';
-import { buildOrderPlan, sideFromAction } from '../agent-tick/execute.ts';
+import { buildOrderPlan, placeSmartOrder, sideFromAction } from '../agent-tick/execute.ts';
 import { reconcileOrders } from '../agent-tick/reconcile.ts';
 import { sendTradeAlert } from '../agent-tick/alerts.ts';
 import type { Proposal } from '../agent-tick/reasoner.ts';
@@ -181,13 +180,12 @@ Deno.serve(async () => {
       }
 
       try {
-        const orderRes = await placeOrder(creds, {
+        const { order: orderRes, orderType, limitPrice } = await placeSmartOrder(creds, {
           symbol: plan.symbol,
           qty: plan.qty,
           side: sideFromAction(p.action),
-          type: 'market',
-          time_in_force: 'day',
-          client_order_id: `q-${row.id.slice(0, 13)}`,
+          isOption: plan.optionSymbol != null,
+          clientOrderId: `q-${row.id.slice(0, 13)}`,
         });
         await supabase
           .from('agent_orders')
@@ -197,6 +195,8 @@ Deno.serve(async () => {
             submitted_at: orderRes.submitted_at,
             qty: plan.qty,
             option_symbol: plan.optionSymbol,
+            order_type: orderType,
+            limit_price: limitPrice,
             notional_usd: decision.notional,
             raw_alpaca: orderRes,
             rejection_reason: null,
