@@ -196,6 +196,16 @@ export async function getOpenOrders(c: AlpacaCredentials): Promise<AlpacaOrder[]
   );
 }
 
+/** Fetch a single order by Alpaca order id — used by the fill-reconciliation
+ *  pass to move agent_orders rows from 'submitted' to their terminal state
+ *  (filled / canceled / expired) with the actual fill price. */
+export async function getOrderById(
+  c: AlpacaCredentials,
+  alpacaOrderId: string,
+): Promise<AlpacaOrder> {
+  return req<AlpacaOrder>(c, 'GET', tradingBase(c), `/v2/orders/${alpacaOrderId}`);
+}
+
 export async function placeOrder(
   c: AlpacaCredentials,
   p: PlaceOrderParams,

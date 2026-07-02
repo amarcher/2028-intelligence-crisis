@@ -81,7 +81,12 @@ export type GuardrailDecision =
       notional: number;
       size_pct: number;
     }
-  | { outcome: 'rejected'; reason: string };
+  | { outcome: 'rejected'; reason: string }
+  /** Proposal is clean but the market is closed (premarket/weekend tick).
+   *  Caller should queue it for the agent-queue-flush pass at the next open
+   *  instead of dropping it — the premarket tick used to lose every proposal
+   *  to a market-hours rejection. */
+  | { outcome: 'deferred'; reason: string; notional: number; size_pct: number };
 
 // ————— helpers —————
 
@@ -157,15 +162,6 @@ export function validateTrade(p: Proposal, ctx: GuardrailContext): GuardrailDeci
   // Account status checks from Alpaca
   if (account.trading_blocked || account.account_blocked) {
     return { outcome: 'rejected', reason: 'Alpaca account blocked or trading disabled' };
-  }
-
-  // Market hours. Orders can technically queue pre-market, but the playbook
-  // wants us off the close auction and out of pre/post.
-  if (!isInMarketHours(now)) {
-    return {
-      outcome: 'rejected',
-      reason: 'outside trading window (09:30–15:55 ET, Mon–Fri only)',
-    };
   }
 
   // ————— compute notional —————
@@ -255,6 +251,19 @@ export function validateTrade(p: Proposal, ctx: GuardrailContext): GuardrailDeci
         reason: `${CAPS.maxOptionTickets} open option tickets (max) — close one before adding another`,
       };
     }
+  }
+
+  // Market hours — checked LAST so a clean proposal outside the window
+  // (premarket tick, weekly Monday 8am tick) defers to the queue-flush pass
+  // at the open instead of being rejected. Cap violations above still reject
+  // immediately regardless of clock.
+  if (!isInMarketHours(now)) {
+    return {
+      outcome: 'deferred',
+      reason: 'outside trading window (09:30–15:55 ET) — queued for market open',
+      notional,
+      size_pct: sizePct,
+    };
   }
 
   return { outcome: 'approved', notional, size_pct: sizePct };

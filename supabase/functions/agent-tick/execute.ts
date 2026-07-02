@@ -64,6 +64,9 @@ export interface AgentOrderRow {
   submitted_at?: string | null;
   rejection_reason?: string | null;
   raw_alpaca?: unknown;
+  /** Full proposal JSON, stored on status='queued' rows so agent-queue-flush
+   *  can re-validate and place the order at the next market open. */
+  proposal?: unknown;
 }
 
 export interface AgentApprovalRow {
@@ -246,6 +249,26 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
 
     const decision = validateTrade(p, ctx);
 
+    if (decision.outcome === 'deferred') {
+      // Clean proposal, market closed (premarket / weekly-Monday tick).
+      // Persist as queued with the proposal payload; agent-queue-flush
+      // re-validates and places it shortly after the open.
+      await input.supa.insertOrder({
+        digest_id: input.digestId,
+        ticker: p.ticker,
+        instrument: p.instrument,
+        side: sideFromAction(p.action),
+        qty: 0,
+        order_type: 'market',
+        notional_usd: decision.notional,
+        status: 'queued',
+        rejection_reason: decision.reason,
+        proposal: p,
+      });
+      queued++;
+      continue;
+    }
+
     if (decision.outcome === 'rejected') {
       await input.supa.insertOrder({
         digest_id: input.digestId,
@@ -295,61 +318,24 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     // ————— place the order —————
 
     const side = sideFromAction(p.action);
-    let symbol = p.ticker;
-    let qty: number;
-    let optionSymbol: string | null = null;
-
-    if (p.instrument === 'equity') {
-      qty = Math.max(1, Math.floor(decision.notional / Math.max(account.equity * 0.0001, 1)));
-      // For equity we just let qty be decision.notional / current_price.
-      // Without a quote, use a conservative estimate based on the ticker in
-      // existing positions if present; otherwise qty = 1 as a fallback (the
-      // guardrail already enforces the notional ceiling so downside is bounded).
-      const existing = positions.find((pos) => pos.symbol === p.ticker);
-      const estPrice = existing?.current_price ?? existing?.avg_entry_price ?? 100;
-      qty = Math.max(1, Math.round(decision.notional / estPrice));
-    } else {
-      // Option — resolve OCC symbol, then size in contracts
-      try {
-        const resolved = await resolveOptionSymbol(creds, p);
-        if (!resolved) {
-          await input.supa.insertOrder({
-            digest_id: input.digestId,
-            ticker: p.ticker,
-            instrument: p.instrument,
-            side,
-            qty: 0,
-            order_type: 'market',
-            notional_usd: null,
-            status: 'rejected',
-            rejection_reason: `could not resolve OCC symbol for ${p.ticker} ${p.instrument} ${p.expiry ?? '?'} ${p.strike ?? '?'}`,
-          });
-          rejected++;
-          continue;
-        }
-        symbol = resolved.symbol;
-        optionSymbol = resolved.symbol;
-        // Each contract = 100 shares. Use close_price as notional estimate.
-        // If no close price, default to $1 (min contract price).
-        const perContractCost = (resolved.close_price ?? 1) * 100;
-        qty = Math.max(1, Math.round(decision.notional / perContractCost));
-      } catch (e) {
-        errors.push(`option resolution failed for ${p.ticker}: ${String(e).slice(0, 200)}`);
-        await input.supa.insertOrder({
-          digest_id: input.digestId,
-          ticker: p.ticker,
-          instrument: p.instrument,
-          side,
-          qty: 0,
-          order_type: 'market',
-          notional_usd: null,
-          status: 'rejected',
-          rejection_reason: `option chain lookup threw: ${String(e).slice(0, 200)}`,
-        });
-        rejected++;
-        continue;
-      }
+    const plan = await buildOrderPlan(creds, p, decision.notional, positions);
+    if (!plan.ok) {
+      errors.push(`order plan ${p.ticker}: ${plan.reason}`);
+      await input.supa.insertOrder({
+        digest_id: input.digestId,
+        ticker: p.ticker,
+        instrument: p.instrument,
+        side,
+        qty: 0,
+        order_type: 'market',
+        notional_usd: null,
+        status: 'rejected',
+        rejection_reason: plan.reason,
+      });
+      rejected++;
+      continue;
     }
+    const { symbol, qty, optionSymbol } = plan;
 
     // Client order ID for idempotency — digest_id + proposal index
     const clientOrderId = `${input.digestId.slice(0, 8)}-${i}`;
@@ -430,10 +416,60 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
 
 // ————— helpers —————
 
-function sideFromAction(action: Proposal['action']): 'buy' | 'sell' {
+export function sideFromAction(action: Proposal['action']): 'buy' | 'sell' {
   if (action === 'open' || action === 'add') return 'buy';
   // trim, close, roll (sell-side of the roll), unwind_all all reduce position
   return 'sell';
+}
+
+export type OrderPlan =
+  | { ok: true; symbol: string; qty: number; optionSymbol: string | null }
+  | { ok: false; reason: string };
+
+/** Resolve the tradable symbol + quantity for an approved proposal.
+ *  Shared between the tick executor and agent-queue-flush so queued orders
+ *  are planned with exactly the same rules at the open. */
+export async function buildOrderPlan(
+  creds: AlpacaCredentials,
+  p: Proposal,
+  notional: number,
+  positions: AlpacaPosition[],
+): Promise<OrderPlan> {
+  if (p.instrument === 'equity') {
+    // qty = notional / current price. Without a live quote, estimate from an
+    // existing position's price; otherwise a conservative $100 fallback (the
+    // guardrail already bounded the notional so downside is capped).
+    const existing = positions.find((pos) => pos.symbol === p.ticker);
+    const estPrice = existing?.current_price ?? existing?.avg_entry_price ?? 100;
+    return {
+      ok: true,
+      symbol: p.ticker,
+      qty: Math.max(1, Math.round(notional / estPrice)),
+      optionSymbol: null,
+    };
+  }
+
+  // Option — resolve OCC symbol, then size in contracts.
+  try {
+    const resolved = await resolveOptionSymbol(creds, p);
+    if (!resolved) {
+      return {
+        ok: false,
+        reason: `could not resolve OCC symbol for ${p.ticker} ${p.instrument} ${p.expiry ?? '?'} ${p.strike ?? '?'}`,
+      };
+    }
+    // Each contract = 100 shares. Use close_price as notional estimate.
+    // If no close price, default to $1 (min contract price).
+    const perContractCost = (resolved.close_price ?? 1) * 100;
+    return {
+      ok: true,
+      symbol: resolved.symbol,
+      qty: Math.max(1, Math.round(notional / perContractCost)),
+      optionSymbol: resolved.symbol,
+    };
+  } catch (e) {
+    return { ok: false, reason: `option chain lookup threw: ${String(e).slice(0, 200)}` };
+  }
 }
 
 interface ResolvedOption {

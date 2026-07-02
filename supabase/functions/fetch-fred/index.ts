@@ -49,7 +49,11 @@ Deno.serve(async (req: Request) => {
       // No body or invalid JSON — fetch all series
     }
 
-    // Daily series need weekly aggregation + longer history
+    // Daily series stay DAILY. They used to be aggregated to weekly Fridays
+    // ('wef'), which broke the S&P peak-stall trigger: with sparse weekly
+    // prints the print-counting logic fired "no new high for 2 months" three
+    // weeks after an all-time high. Daily closes also give the reasoner a
+    // real day-over-day drift read instead of a stale Friday snapshot.
     const DAILY_SERIES = new Set(['DGS10', 'SP500', 'VIXCLS']);
 
     const results: Record<string, number> = {};
@@ -62,9 +66,10 @@ Deno.serve(async (req: Request) => {
       url.searchParams.set('sort_order', 'desc');
 
       if (DAILY_SERIES.has(seriesId)) {
-        url.searchParams.set('frequency', 'wef'); // aggregate to weekly (Friday)
-        url.searchParams.set('observation_start', '2020-01-01');
-        url.searchParams.set('limit', '500');
+        // ~2.5 years of daily prints; desc + limit keeps the payload bounded
+        // and upsert makes re-runs idempotent.
+        url.searchParams.set('observation_start', '2024-01-01');
+        url.searchParams.set('limit', '700');
       } else {
         url.searchParams.set('limit', '120'); // ~10 years of monthly data
       }
