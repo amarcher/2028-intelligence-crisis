@@ -62,7 +62,10 @@ export default function Header() {
             )}
             <button
               onClick={() => {
-                document.getElementById(`section-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                const section = document.getElementById(`section-${s.id}`);
+                const archive = section?.closest('details');
+                if (archive) archive.open = true;
+                section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               }}
               className="text-[10px] font-bold tracking-[0.06em] font-mono cursor-pointer py-1.5 px-3.5 rounded transition-all duration-200"
               style={{

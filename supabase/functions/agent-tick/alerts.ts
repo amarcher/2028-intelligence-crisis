@@ -97,7 +97,7 @@ function dashboardLink(): string {
 
 export interface KillAlertInput {
   reason: string;            // "Daily loss stop: equity $X from $Y (-4.00%)"
-  canceledOrders: number;
+  canceledOrders: number | null;
   dayPlPct?: number;
   equity?: number;
   lastEquity?: number;
@@ -110,7 +110,7 @@ export async function sendKillAlert(
   const body =
     `*The agent stopped placing new trades at ${new Date().toISOString()}*\n\n` +
     `Reason: ${k.reason}\n` +
-    `Canceled ${k.canceledOrders} open order${k.canceledOrders === 1 ? '' : 's'}.\n\n` +
+    `Confirmed order cancellations: ${k.canceledOrders ?? 'unknown — inspect broker orders'}.\n\n` +
     `You need to approve before the agent will place new trades again. Existing positions are untouched — the agent only stopped opening *new* ones.` +
     dashboardLink();
   return fanout(subject, body);
@@ -154,7 +154,7 @@ function kindHumanLabel(kind: ApprovalAlertInput['kind']): string {
     case 'resume_after_halt':
       return 'restarting trading after the safety stop fired';
     default:
-      return kind.replace(/_/g, ' ');
+      return String(kind).replace(/_/g, ' ');
   }
 }
 
@@ -176,53 +176,36 @@ export interface TradeAlertInput {
   rationale: string;
   exit_condition: string;
   alpaca_order_id?: string;
+  broker_status?: string;
+  filled_qty?: string | number | null;
 }
 
-const STANDING_GUARDS =
-  'Safety stops in place: the agent stops trading if 2+ economic readings turn the opposite way from the prediction, or if the account loses 4% in a single day.';
-
-function tradeActionLabel(action: string, side: 'buy' | 'sell'): string {
-  switch (action) {
-    case 'open': return side === 'buy' ? 'Bought' : 'Opened short';
-    case 'add': return side === 'buy' ? 'Added more' : 'Added to short';
-    case 'trim': return 'Sold some';
-    case 'close': return 'Closed';
-    case 'roll': return 'Replaced';
-    default: return `${action} (${side})`;
-  }
+export function formatTradeAlert(t: TradeAlertInput): { subject: string; body: string } {
+  const status = t.alpaca_order_id ? (t.broker_status ?? 'submitted') : 'advisory';
+  const filled = status === 'filled' && Number(t.filled_qty) > 0;
+  const label = status === 'advisory' ? 'Advisory — no order placed'
+    : filled ? `${t.side === 'buy' ? 'Buy' : 'Sell'} filled`
+    : status === 'filled' ? 'Fill reported — quantity unverified'
+    : status === 'partially_filled' ? 'Partially filled'
+    : ['rejected', 'canceled', 'expired'].includes(status) ? `Order ${status}`
+    : 'Order submitted — fill unconfirmed';
+  const contract = `${t.ticker} ${t.instrument.replaceAll('_', ' ')}${t.expiry ? ` ${t.expiry}` : ''}${t.strike != null ? ` @${t.strike}` : ''}`;
+  const subject = `[2028 Tracker] ${label}: ${contract}`;
+  const body = `*${label}: ${contract}*\n` +
+    (t.alpaca_order_id ? `Order ID: ${t.alpaca_order_id}\nBroker status: ${status}\nRequested quantity: ${t.qty}\nConfirmed filled quantity: ${t.filled_qty ?? 'unknown'}\n` : '') +
+    `Estimated notional (not a fill): ${t.notional_usd == null ? 'unknown' : `$${t.notional_usd.toFixed(2)}`}\n\n` +
+    `Reason for proposal or rule: ${t.rationale}\nExit rule: ${t.exit_condition}`;
+  return { subject, body };
 }
 
-export async function sendTradeAlert(
-  t: TradeAlertInput,
-): Promise<{ ok: boolean; error?: string }> {
-  const instrLabel =
-    t.instrument === 'equity'
-      ? ''
-      : ` ${t.instrument.replace('_', ' ')}`;
-  const ex = t.expiry ? ` ${t.expiry}` : '';
-  const str = t.strike != null ? ` @${t.strike}` : '';
-  const actionLabel = tradeActionLabel(t.action, t.side);
-  const sizeLabel =
-    t.instrument === 'equity'
-      ? `${t.qty} share${t.qty === 1 ? '' : 's'}`
-      : `${t.qty} contract${t.qty === 1 ? '' : 's'}`;
-  const dollarLabel =
-    t.notional_usd != null ? `about $${Math.round(t.notional_usd).toLocaleString('en-US')}` : 'market price';
+export async function sendTradeAlert(t: TradeAlertInput): Promise<{ ok: boolean; error?: string }> {
+  const { subject, body } = formatTradeAlert(t);
+  return fanout(subject, body + dashboardLink());
+}
 
-  const subject = `✅ [2028 Tracker] ${actionLabel} ${t.ticker}${instrLabel}${ex}${str} — ${sizeLabel} (${dollarLabel})`;
-
-  const idLine = t.alpaca_order_id ? `\nOrder ID: \`${t.alpaca_order_id}\`` : '';
-  const occ = t.option_symbol ? `\nFull option symbol: \`${t.option_symbol}\`` : '';
-
-  const body =
-    `*${actionLabel} ${t.ticker}${instrLabel}${ex}${str}*\n` +
-    `Size: ${sizeLabel} · estimated cost: ${dollarLabel}${occ}${idLine}\n\n` +
-    `*Why we did it:* ${t.rationale}\n` +
-    `*When we'll close it:* ${t.exit_condition}\n\n` +
-    `_${STANDING_GUARDS}_` +
-    dashboardLink();
-
-  return fanout(subject, body);
+export async function sendExecutionSummary(steps: string[]): Promise<{ ok: boolean; error?: string }> {
+  return fanout('[2028 Tracker] Approved orders submitted — fills unconfirmed',
+    `${steps.length} order submissions: ${steps.join(', ')}. Check order records for fills.` + dashboardLink());
 }
 
 function approvalActionLabel(action: string): string {

@@ -1,3 +1,4 @@
+import { accountQuality } from '../../../src/lib/evidence.ts';
 // Supabase Edge Function: Daily loss-stop watchdog.
 // Fires every ~15 minutes during US market hours via pg_cron. Checks the
 // Alpaca account's day P&L; if worse than -4%, cancels all open orders and
@@ -13,6 +14,7 @@ import {
   alpacaFromEnv,
   cancelAllOrders,
   getAccount,
+  getPositions,
   type AlpacaCredentials,
 } from '../agent-tick/alpaca.ts';
 import { sendKillAlert } from '../agent-tick/alerts.ts';
@@ -47,13 +49,17 @@ Deno.serve(async () => {
       return json({ skipped: true, reason: `alpaca not configured: ${String(e).slice(0, 200)}` });
     }
 
-    const account = await getAccount(creds);
+    const [account, positions] = await Promise.all([getAccount(creds), getPositions(creds)]);
+    const { data: prior, error: priorError } = await supabase.from('agent_equity_snapshots')
+      .select('equity, cash, gross_exposure').order('taken_at', { ascending: false }).limit(1).maybeSingle();
+    const dataIssue = priorError ? 'Prior account evidence unavailable' : accountQuality(account, positions, prior);
+
     const lossRatio =
       account.last_equity > 0 ? (account.equity - account.last_equity) / account.last_equity : 0;
 
     // P&L above the threshold — nothing to do. Return the observation so the
     // cron job log shows progress.
-    if (lossRatio > DAILY_LOSS_STOP_PCT) {
+    if (!dataIssue && lossRatio > DAILY_LOSS_STOP_PCT) {
       return json({
         ok: true,
         halted: false,
@@ -64,13 +70,12 @@ Deno.serve(async () => {
     }
 
     // Kill trigger.
-    const cancelResult = await cancelAllOrders(creds);
     const lossPct = (lossRatio * 100).toFixed(2);
-    const haltReason =
+    const haltReason = dataIssue ? `Broker data incident: ${dataIssue}. Loss cannot be verified; owner review required` :
       `Daily loss stop: equity $${account.equity.toFixed(0)} ` +
       `from $${account.last_equity.toFixed(0)} (${lossPct}%)`;
 
-    await supabase
+    const { error: haltError } = await supabase
       .from('agent_config')
       .update({
         halted: true,
@@ -79,19 +84,24 @@ Deno.serve(async () => {
         updated_at: new Date().toISOString(),
       })
       .eq('id', 1);
+    if (haltError) throw new Error(`Could not persist safety halt: ${haltError.message}`);
+    // Persist the halt first; a cancellation API failure must not leave entries enabled.
+    let canceledCount: number | null = null;
+    try { canceledCount = (await cancelAllOrders(creds)).filter(r => r.status >= 200 && r.status < 300).length; }
+    catch (e) { console.error('Cancellation result unknown:', String(e).slice(0, 200)); }
 
     await supabase.from('agent_approvals').insert({
       kind: 'resume_after_halt',
       proposals: [],
       rationale:
-        `${haltReason}. Canceled ${cancelResult.length} open order${cancelResult.length === 1 ? '' : 's'}. ` +
+        `${haltReason}. Confirmed cancellations: ${canceledCount ?? 'unknown; check broker'}. ` +
         `Owner must approve before the agent places new entries.`,
     });
 
     // Fire alert email. Failure is non-fatal — halt is already persisted.
     const alertRes = await sendKillAlert({
       reason: haltReason,
-      canceledOrders: cancelResult.length,
+      canceledOrders: canceledCount,
       dayPlPct: Number(lossPct),
       equity: account.equity,
       lastEquity: account.last_equity,
@@ -102,7 +112,7 @@ Deno.serve(async () => {
       halted: true,
       reason: haltReason,
       day_pl_pct: Number(lossPct),
-      canceled_orders: cancelResult.length,
+      canceled_orders: canceledCount,
       alert: alertRes,
     });
   } catch (err) {

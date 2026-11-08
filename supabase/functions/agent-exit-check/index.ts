@@ -25,7 +25,6 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   alpacaFromEnv,
   getPositions,
-  type AlpacaPosition,
 } from '../agent-tick/alpaca.ts';
 import { isInMarketHours } from '../agent-tick/guardrails.ts';
 import { executeSpreadProposal, placeSmartOrder } from '../agent-tick/execute.ts';
@@ -289,8 +288,10 @@ Deno.serve(async () => {
             qty: sellQty,
             notional_usd: Math.abs(pos.current_price * 100 * sellQty),
             rationale: why,
-            exit_condition: 'This was the exit — a pre-set rule (stop-loss or profit tier), enforced automatically.',
+            exit_condition: 'Exit order submitted; fill not confirmed — a pre-set rule (stop-loss or profit tier), enforced automatically.',
             alpaca_order_id: order.id,
+        broker_status: order.status,
+        filled_qty: order.filled_qty,
           });
           if (!alertRes.ok) summary.errors.push(`alert ${pos.symbol}: ${alertRes.error}`);
         } catch (e) {
@@ -320,7 +321,7 @@ Deno.serve(async () => {
             strike: occ.strike,
             qty: pos.qty,
             notional_usd: Math.abs(pos.market_value),
-            rationale: `Heads up — this option expires in ${dte} days (under the ${rule.roll_alert_dte}-day line). The playbook says replace it with the same bet further out (next January). No order was placed; the agent will propose the replacement in its next check-in.`,
+            rationale: `Heads up — this option expires in ${dte} days (under the ${rule.roll_alert_dte}-day line). The playbook says replace it with the same bet further out (next January). No order was placed. Replacement requires a separate proposal and execution decision.`,
             exit_condition: 'Advisory only — nothing was traded.',
           });
         } else {
@@ -386,8 +387,10 @@ Deno.serve(async () => {
         qty: res.qty,
         notional_usd: null,
         rationale: `Time's up on this ${rule.archetype.replace(/_/g, ' ')} spread — pre-set close date ${rule.force_close_date} reached; closing both legs together.`,
-        exit_condition: 'This was the exit — an automatic time stop.',
+        exit_condition: 'Exit order submitted; fill not confirmed — an automatic time stop.',
         alpaca_order_id: res.order.id,
+        broker_status: res.order.status,
+        filled_qty: res.order.filled_qty,
       });
     }
 
@@ -428,8 +431,10 @@ Deno.serve(async () => {
           qty: eqPos.qty,
           notional_usd: Math.abs(eqPos.market_value),
           rationale: `The ${rule.archetype.replace(/_/g, ' ')} window ended (${rule.force_close_date}) — selling the whole position on schedule. These leveraged funds lose value if held too long.`,
-          exit_condition: 'This was the exit — an automatic time stop.',
+          exit_condition: 'Exit order submitted; fill not confirmed — an automatic time stop.',
           alpaca_order_id: order.id,
+        broker_status: order.status,
+        filled_qty: order.filled_qty,
         });
       } catch (e) {
         summary.errors.push(`tactical close ${eqPos.symbol}: ${String(e).slice(0, 150)}`);

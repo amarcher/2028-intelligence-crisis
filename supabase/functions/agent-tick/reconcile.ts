@@ -11,9 +11,7 @@
 
 import { getOrderById, type AlpacaCredentials, type AlpacaOrder } from './alpaca.ts';
 
-/** Minimal supabase-js surface used here (matches createClient's chainables). */
-// deno-lint-ignore no-explicit-any
-type SupabaseClient = any;
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const NON_TERMINAL = ['submitted', 'partially_filled'];
 
@@ -95,14 +93,14 @@ export async function reconcileOrders(
     // One agent_fills row per fully-filled order (avg-price granularity —
     // per-execution fills would need the activities API; not worth it yet).
     // alpaca_trade_id is UNIQUE, so re-running is a no-op upsert conflict.
-    if (newStatus === 'filled' && order.filled_at) {
+    if (newStatus === 'filled' && order.filled_at && Number(order.filled_avg_price) > 0 && Number(order.filled_qty) > 0) {
       result.filled++;
       const { error: fillErr } = await supabase.from('agent_fills').upsert(
         {
           order_id: row.id,
           filled_at: order.filled_at,
           qty: Number(order.filled_qty),
-          price: order.filled_avg_price == null ? 0 : Number(order.filled_avg_price),
+          price: Number(order.filled_avg_price),
           side: row.side,
           ticker: row.ticker,
           option_symbol: row.option_symbol ?? null,

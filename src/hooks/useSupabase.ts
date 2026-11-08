@@ -34,7 +34,7 @@ export function useSupabase(seriesId: string, options?: UseSupabaseOptions): Use
         .from('economic_data')
         .select('date, value')
         .eq('series_id', seriesId)
-        .order('date', { ascending: true });
+        .order('date', { ascending: false }).limit(1000);
 
       if (options?.startDate) {
         query = query.gte('date', options.startDate);
@@ -46,14 +46,15 @@ export function useSupabase(seriesId: string, options?: UseSupabaseOptions): Use
 
       if (queryError) {
         setError(queryError.message);
+        setData([]);
         setIsLoading(false);
         return;
       }
 
       setData(
-        (rows || []).map((row: { date: string; value: number }) => ({
+        (rows || []).reverse().map((row: { date: string; value: number | null }) => ({
           date: row.date,
-          value: Number(row.value),
+          value: row.value == null ? null : Number(row.value),
         }))
       );
       setIsLoading(false);

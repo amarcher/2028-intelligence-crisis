@@ -1,3 +1,4 @@
+import { easternParts, inSession } from '../../../src/lib/marketSession.ts';
 // Alpaca API adapter. Raw fetch against /v2 endpoints — no SDK, same
 // pattern as the Anthropic reasoner for Deno/esm.sh compatibility. Paper
 // vs live selected at construction time; same API shape on both hosts.
@@ -225,6 +226,7 @@ export async function placeOrder(
   }
   if (p.client_order_id) body.client_order_id = p.client_order_id;
 
+  if (!inSession(new Date(), await getMarketSession(c, easternParts(new Date()).date))) throw new Error('Exchange is closed; order not submitted');
   return req<AlpacaOrder>(c, 'POST', tradingBase(c), '/v2/orders', body);
 }
 
@@ -261,6 +263,7 @@ export async function placeSpreadOrder(
     })),
   };
   if (opts.clientOrderId) body.client_order_id = opts.clientOrderId;
+  if (!inSession(new Date(), await getMarketSession(c, easternParts(new Date()).date))) throw new Error('Exchange is closed; order not submitted');
   return req<AlpacaOrder>(c, 'POST', tradingBase(c), '/v2/orders', body);
 }
 
@@ -435,4 +438,13 @@ export async function getOptionsChain(
     c, 'GET', tradingBase(c), `/v2/options/contracts?${qs.toString()}`,
   );
   return raw.option_contracts ?? [];
+}
+
+/** US calendar includes exchange holidays and shortened sessions. Fail closed on malformed data. */
+export async function getMarketSession(c: AlpacaCredentials, date: string): Promise<import('../../../src/lib/marketSession.ts').MarketSession | null> {
+  const rows = await req<Array<{ date: string; open: string; close: string }>>(c, 'GET', tradingBase(c), `/v2/calendar?start=${date}&end=${date}`);
+  if (!Array.isArray(rows)) throw new Error('Invalid market calendar response');
+  const session = rows.find(r => r.date === date) ?? null;
+  if (session && (!/^\d{2}:\d{2}$/.test(session.open) || !/^\d{2}:\d{2}$/.test(session.close))) throw new Error('Invalid market session hours');
+  return session;
 }

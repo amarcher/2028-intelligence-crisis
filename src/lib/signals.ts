@@ -2,9 +2,10 @@
 // agent-tick Edge Function. Kept as pure TypeScript (no React, no Vite imports)
 // so Deno can consume it too.
 
-import type { DataPoint, SaaSDataPoint, VerdictType } from './types';
+import type { DataPoint, SaaSDataPoint, VerdictType } from './types.ts';
+import { fresh, observationDate } from './evidence.ts';
 
-export type SignalState = 'fired' | 'pending';
+export type SignalState = 'fired' | 'pending' | 'unknown';
 
 export type SignalKey = 'jolts' | 'claims' | 'saas' | 'sp500' | 'housing' | 'credit';
 
@@ -15,6 +16,8 @@ export interface Signal {
   reading: string;
   threshold: string;
   note: string;
+  asOf?: string | null;
+  qualityIssue?: string | null;
 }
 
 export type Phase = 'counterfactual_grind' | 'inflection';
@@ -28,11 +31,13 @@ export interface SignalsInput {
   /** ICE BofA US High Yield OAS (FRED BAMLH0A0HYM2), daily, in percent.
    *  Optional so older callers degrade to a pending '—' reading. */
   hyOas?: DataPoint[];
+  now?: Date;
 }
 
 export interface SignalsResult {
   signals: Signal[];
   firedCount: number;
+  unknownCount: number;
   phase: Phase;
   phaseLabel: string;
   verdict: VerdictType;
@@ -43,7 +48,7 @@ export interface SignalsResult {
 
 export function lastNonNull(data: DataPoint[]): DataPoint | null {
   for (let i = data.length - 1; i >= 0; i--) {
-    if (data[i].value != null) return data[i];
+    if (data[i].value != null && Number.isFinite(data[i].value)) return data[i];
   }
   return null;
 }
@@ -51,7 +56,7 @@ export function lastNonNull(data: DataPoint[]): DataPoint | null {
 export function lastNNonNull(data: DataPoint[], n: number): DataPoint[] {
   const out: DataPoint[] = [];
   for (let i = data.length - 1; i >= 0 && out.length < n; i--) {
-    if (data[i].value != null) out.unshift(data[i]);
+    if (data[i].value != null && Number.isFinite(data[i].value)) out.unshift(data[i]);
   }
   return out;
 }
@@ -100,7 +105,7 @@ export function evalJolts(data: DataPoint[]) {
 export function evalClaims(data: DataPoint[]) {
   const last4 = lastNNonNull(data, 4);
   const avg =
-    last4.length > 0
+    last4.length === 4
       ? last4.reduce((s, d) => s + (d.value ?? 0), 0) / last4.length
       : null;
   const fired = avg != null && avg > 300_000;
@@ -128,7 +133,7 @@ export function evalSp500(data: DataPoint[]) {
   if (nonNull.length === 0) return { fired: false, reading: '—' };
   let maxIdx = 0;
   for (let i = 0; i < nonNull.length; i++) {
-    if (nonNull[i].value > nonNull[maxIdx].value) maxIdx = i;
+    if (nonNull[i].value >= nonNull[maxIdx].value) maxIdx = i;
   }
   const peak = nonNull[maxIdx].value;
   const latest = nonNull[nonNull.length - 1].value;
@@ -187,22 +192,22 @@ const SIGNAL_META: Record<SignalKey, { label: string; threshold: string; note: s
   claims: {
     label: 'UNEMPLOYMENT FILINGS RISE',
     threshold: '4-week average above 300K',
-    note: 'First hard proof that the layoff wave is here',
+    note: 'A sustained increase would support broader labor-market deterioration',
   },
   saas: {
     label: 'SOFTWARE GROWTH SLOWDOWN',
     threshold: 'ServiceNow & Workday both below 14% growth',
-    note: 'When the biggest enterprise software companies slow, it shows AI is replacing software spend',
+    note: 'Revenue growth is a proxy, not proof that AI is replacing software spending',
   },
   sp500: {
     label: 'STOCK MARKET STALLS NEAR PEAK',
     threshold: 'S&P 500 hit 7,500+ then no new high for 2 months',
-    note: "The bull run is running out of steam — time to start positioning for a downturn",
+    note: "A sustained stall is a market-pattern observation, not an instruction to trade",
   },
   credit: {
     label: 'BOND MARKET STRESS',
     threshold: 'junk-bond risk premium ≥ 3.5% and up 1+ point off its 3-month low, 5 days running',
-    note: 'When lenders demand much more to hold risky company debt, credit is drying up — the contagion phase is near',
+    note: 'Persistent spread widening can indicate credit stress; it does not establish a contagion forecast',
   },
   housing: {
     label: 'HOME PRICES FALLING',
@@ -211,11 +216,32 @@ const SIGNAL_META: Record<SignalKey, { label: string; threshold: string; note: s
   },
 };
 
-const PLAYBOOK_PHASE1 =
-  "Stay defensive while we wait. Hold long-dated put options on the big software companies (NOW, CRM, HUBS, WDAY, DDOG, expiring Jan 2027 / Jan 2028) — these pay off if those stocks fall. Hold safe-haven positions in bonds (TLT), gold (GLD), and consumer staples (XLP). Keep small AI-stock holdings (QQQ, SMH) so we don't miss the last leg up. Don't make aggressive bets against the market until at least 2 of the 5 economic readings cross their danger lines.";
+const PLAYBOOK_PHASE1 = 'Research regime: fewer than two verified triggers. This does not describe holdings or authorize trades. Review relative SaaS performance, revenue growth and disconfirming evidence alongside the slow macro readings.';
+const PLAYBOOK_PHASE2 = 'Research regime: at least two verified triggers. Review the evidence and existing approval rules; a regime change is not an executed trade.';
 
-const PLAYBOOK_PHASE2 =
-  "Switch to action mode. Sell the AI-stock holdings. Replace the long-dated software put options with shorter, more aggressive ones (3–6 months out). Add bear bets on the broader market (SPY, QQQ put spreads), and on commercial real estate and junk bonds (HYG, KRE). Keep 15–20% in cash so we can take advantage of bear-market rallies.";
+function quality(input: SignalsInput, key: SignalKey): { asOf: string | null; qualityIssue: string | null } {
+  const now = input.now ?? new Date();
+  if (key === 'saas') {
+    const rows = ['servicenow', 'workday'].map(field => [...input.saas].reverse().find(r => r[field as 'servicenow' | 'workday'] != null));
+    const dates = rows.map(r => r?.date).filter((d): d is string => !!d).sort();
+    return { asOf: dates[0] ?? null, qualityIssue: rows.some(r => !r || !fresh(r.date, 180, now)) ? 'Both company observations must be available and no more than 180 days old' : null };
+  }
+  const series = { jolts: input.jolts, claims: input.claims, sp500: input.sp500, housing: input.caseShiller, credit: input.hyOas ?? [] }[key];
+  const count = { jolts: 2, claims: 4, sp500: 1, housing: 1, credit: 5 }[key];
+  const maxAge = { jolts: 100, claims: 21, sp500: 7, housing: 130, credit: 7 }[key];
+  const rows = lastNNonNull(series, count);
+  const asOf = rows.at(-1)?.date ?? null;
+  let qualityIssue: string | null = null;
+  if (rows.length < count) qualityIssue = `Need ${count} observations`;
+  else if (!fresh(asOf ?? undefined, maxAge, now)) qualityIssue = `Missing, future-dated or older than ${maxAge} days`;
+  else if (key === 'housing' && yoyPct(series) == null) qualityIssue = 'Missing year-earlier comparison';
+  else if (count > 1) {
+    const maxGap = key === 'jolts' ? 35 : key === 'claims' ? 8 : 4;
+    const minGap = key === 'jolts' ? 28 : key === 'claims' ? 6 : 1;
+    if (rows.slice(1).some((r,i) => { const gap = (observationDate(r.date) - observationDate(rows[i].date)) / 86_400_000; return gap > maxGap || gap < minGap; })) qualityIssue = 'Observations are not consecutive at the expected cadence';
+  }
+  return { asOf, qualityIssue };
+}
 
 export function computeSignals(input: SignalsInput): SignalsResult {
   const evaluated: Record<SignalKey, { fired: boolean; reading: string }> = {
@@ -228,22 +254,21 @@ export function computeSignals(input: SignalsInput): SignalsResult {
   };
 
   const order: SignalKey[] = ['jolts', 'claims', 'saas', 'sp500', 'housing', 'credit'];
-  const signals: Signal[] = order.map((key) => ({
-    key,
-    label: SIGNAL_META[key].label,
-    state: evaluated[key].fired ? 'fired' : 'pending',
-    reading: evaluated[key].reading,
-    threshold: SIGNAL_META[key].threshold,
-    note: SIGNAL_META[key].note,
-  }));
+  const signals: Signal[] = order.map((key) => {
+    const health = quality(input, key);
+    return { key, ...SIGNAL_META[key], ...health,
+      state: health.qualityIssue ? 'unknown' : evaluated[key].fired ? 'fired' : 'pending',
+      reading: evaluated[key].reading };
+  });
 
   const firedCount = signals.filter((s) => s.state === 'fired').length;
   const flipped = firedCount >= 2;
   const phase: Phase = flipped ? 'inflection' : 'counterfactual_grind';
-  const phaseLabel = flipped ? 'PHASE 2 · ACTION' : 'PHASE 1 · WAITING';
+  const unknownCount = signals.filter(s => s.state === 'unknown').length;
+  const phaseLabel = unknownCount ? 'INCOMPLETE DATA · RESEARCH ONLY' : flipped ? 'PHASE 2 · TRIGGERS CROSSED' : 'PHASE 1 · WAITING';
   const verdict: VerdictType =
     firedCount >= 4 ? 'confirmed' : firedCount >= 2 ? 'trending' : 'early';
   const playbook = flipped ? PLAYBOOK_PHASE2 : PLAYBOOK_PHASE1;
 
-  return { signals, firedCount, phase, phaseLabel, verdict, playbook };
+  return { signals, firedCount, unknownCount, phase, phaseLabel, verdict, playbook };
 }

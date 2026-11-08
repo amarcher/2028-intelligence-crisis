@@ -158,6 +158,12 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
     };
   }
 
+  // A drill returns before credentials, database writes, alerts or broker calls.
+  if (input.dryRun) return { mode: 'auto_execute', phase: input.config.phase,
+    placed: 0, queued: 0, rejected: 0, errors: [], planned: input.proposals };
+  if (input.config.halted) return { mode: 'auto_execute', phase: input.config.phase,
+    placed: 0, queued: 0, rejected: 0, errors: [`Halted: ${input.config.halt_reason ?? 'unknown reason'}`] };
+
   let creds: AlpacaCredentials;
   try {
     creds = alpacaFromEnv(input.config.paper_mode);
@@ -424,6 +430,8 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
         rationale: p.rationale,
         exit_condition: p.exit_condition,
         alpaca_order_id: res.order.id,
+        broker_status: res.order.status,
+        filled_qty: res.order.filled_qty,
       });
       if (!alertRes.ok) errors.push(`trade alert ${p.ticker}: ${alertRes.error ?? 'unknown'}`);
       placed++;
@@ -491,6 +499,8 @@ export async function orchestrateExecution(input: ExecutionInput): Promise<Execu
         rationale: p.rationale,
         exit_condition: p.exit_condition,
         alpaca_order_id: orderRes.id,
+        broker_status: orderRes.status,
+        filled_qty: orderRes.filled_qty,
       });
       if (!alertRes.ok) {
         errors.push(`trade alert ${p.ticker}: ${alertRes.error ?? 'unknown'}`);
