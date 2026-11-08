@@ -1,3 +1,4 @@
+import { EVIDENCE_VERSION } from '../../lib/evidence';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Line,
@@ -20,6 +21,7 @@ interface TaiPoint {
   date: string;
   score: number;
   stance: string;
+  version: string;
 }
 
 interface EquityPoint {
@@ -47,14 +49,15 @@ export default function MetaSignals() {
       .from('meta_indices')
       .select('observed_at, value, detail')
       .eq('key', 'tai')
-      .order('observed_at', { ascending: true })
+      .order('observed_at', { ascending: false })
       .limit(120)
       .then(({ data }) => {
         if (!data) return;
         setTai(
-          data.map((r) => ({
+          [...data].reverse().filter(r => !data.some(point => point.detail?.version === EVIDENCE_VERSION) || r.detail?.version === EVIDENCE_VERSION).map((r) => ({
             date: String(r.observed_at).slice(5, 10),
             score: Number(r.value),
+            version: (r.detail as { version?: string } | null)?.version ?? 'legacy / unaudited',
             stance: (r.detail as { stance?: string } | null)?.stance ?? '—',
           })),
         );
@@ -62,15 +65,16 @@ export default function MetaSignals() {
     supabase
       .from('agent_equity_snapshots')
       .select('taken_at, equity, spy_close')
-      .order('taken_at', { ascending: true })
+      .order('taken_at', { ascending: false })
       .limit(500)
       .then(({ data }) => {
         if (!data || data.length === 0) return;
-        const first = data.find((r) => r.equity != null && r.spy_close != null) ?? data[0];
+        const chronological = [...data].reverse();
+        const first = chronological.find((r) => r.equity != null && r.spy_close != null) ?? chronological[0];
         const baseEq = Number(first.equity) || 1;
         const baseSpy = Number(first.spy_close) || null;
         setEquity(
-          data.map((r) => ({
+          chronological.map((r) => ({
             date: String(r.taken_at).slice(5, 10),
             agent: (Number(r.equity) / baseEq) * 100,
             spy: baseSpy && r.spy_close != null ? (Number(r.spy_close) / baseSpy) * 100 : null,
@@ -80,15 +84,15 @@ export default function MetaSignals() {
   }, []);
 
   const proximity = useMemo(() => {
-    const sp500Fired =
-      computeSignals({
+    const health = computeSignals({
         jolts: jolts.data,
         claims: claims.data,
         sp500: sp500.data,
         caseShiller: caseShiller.data,
         saas: saas.data,
         hyOas: hyOas.data,
-      }).signals.find((s) => s.key === 'sp500')?.state === 'fired';
+      });
+    const sp500Fired = health.signals.find(s => s.key === 'sp500')?.state === 'fired';
     return computeProximity({
       jolts: jolts.data,
       claims: claims.data,
@@ -96,7 +100,7 @@ export default function MetaSignals() {
       hyOas: hyOas.data,
       saas: saas.data,
       sp500Fired,
-    });
+    }).map(p => health.signals.find(s => s.key === p.key)?.state === 'unknown' ? { ...p, etaMonths: null, progressPct: null, note: 'Unavailable or stale input; no trend estimate' } : p);
   }, [jolts.data, claims.data, sp500.data, caseShiller.data, hyOas.data, saas.data]);
 
   const latestTai = tai.length > 0 ? tai[tai.length - 1] : null;
@@ -127,9 +131,9 @@ export default function MetaSignals() {
                 </div>
                 <div className="text-[16px] font-extrabold font-display" style={{ color: COLORS.textBright }}>
                   {p.etaMonths == null
-                    ? 'not on track'
+                    ? p.key === 'sp500' ? 'NO PACE ESTIMATE' : p.progressPct == null ? 'DATA UNAVAILABLE' : 'no crossing at current pace'
                     : p.etaMonths === 0
-                      ? 'CROSSED'
+                      ? 'LEVEL REACHED'
                       : `~${p.etaMonths} mo away`}
                 </div>
                 <div className="text-[10px] mt-0.5 font-mono" style={{ color: COLORS.textDim }}>
@@ -140,9 +144,10 @@ export default function MetaSignals() {
           </div>
         </div>
 
+        <p className="text-xs my-3">Fast-score definition: {latestTai?.version ?? 'unavailable'}. {latestTai?.version !== EVIDENCE_VERSION ? 'Legacy scores used inconsistent revenue cohorts; do not compare them with corrected scores.' : 'Corrected same-company revenue comparisons. This is an unvalidated research score, not a probability.'}</p>
         {/* TAI history */}
         <ChartSection
-          title={`FAST SIGNAL (SOFTWARE-VS-AI PRESSURE) — ${latestTai ? `now ${latestTai.score}/100 · ${latestTai.stance.toUpperCase()}` : 'no history yet (starts recording each agent check-in)'}`}
+          title={`FAST SIGNAL (SOFTWARE-VS-AI PRESSURE) — ${latestTai ? `${latestTai.score}/100 · ${latestTai.stance.toUpperCase()} · as of ${latestTai.date}` : 'no history yet (starts recording each agent check-in)'}`}
           height={160}
         >
           <ResponsiveContainer>
@@ -159,7 +164,7 @@ export default function MetaSignals() {
 
         {/* Equity vs SPY */}
         <ChartSection
-          title="THE ACCOUNT VS JUST BUYING THE S&P 500 (both start at 100)"
+          title="THE ACCOUNT VS JUST BUYING THE S&P 500 (both start at 100 in the displayed window)"
           height={160}
         >
           <ResponsiveContainer>

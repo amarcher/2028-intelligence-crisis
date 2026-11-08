@@ -17,18 +17,23 @@ export default function Dashboard() {
   return (
     <>
       <Header />
-      <OverviewStats />
-      <AICapability />
-      <SaaSDisruption />
-      <LaborDisplacement />
-      <ConsumerImpact />
-      <FinancialContagion />
+      {import.meta.env.VITE_USE_REAL_DATA !== 'true' && <p role="status" className="p-4 font-bold">DEMO MODE — sample data, not current evidence.</p>}
+      <AgentDigest />
       <PhaseFlipSignals />
       <MetaSignals />
-      <AgentDigest />
       <ShippingPulse />
-      <FeedbackLoop />
-      <ClaimTracker />
+      <details className="my-6 p-4 border rounded">
+        <summary className="cursor-pointer font-bold">Original thesis and historical context — editorial assessments are not live signals</summary>
+        <p className="my-3">The sections below contain seeded claims, sample indicators and historical verdicts. Expired forecast deadlines need a fresh review; these labels do not establish that predictions came true.</p>
+        <OverviewStats />
+        <AICapability />
+        <SaaSDisruption />
+        <LaborDisplacement />
+        <ConsumerImpact />
+        <FinancialContagion />
+        <FeedbackLoop />
+        <ClaimTracker />
+      </details>
       <Methodology />
     </>
   );

@@ -1,3 +1,7 @@
+import { easternParts, scheduledTick, easternDayStart } from '../../../src/lib/marketSession.ts';
+import { getMarketSession } from './alpaca.ts';
+import { makeReport, reportText, reportFingerprint, shouldDeliver, deliveryChannels } from '../../../src/lib/operationalReport.ts';
+import { EVIDENCE_VERSION, revenueTrend, accountQuality, alignedReturns, fresh } from '../../../src/lib/evidence.ts';
 // Supabase Edge Function: Agent tick
 // Reads economic_data + SaaS series, runs computeSignals(), calls the Claude
 // reasoner to produce a digest (narrative + proposals), persists to
@@ -6,7 +10,7 @@
 // Deploy: supabase functions deploy agent-tick
 // Invoke: curl -X POST <function-url> -d '{"tick_type":"close"}'
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { computeSignals } from '../../../src/lib/signals.ts';
 import { computeProximity, type TriggerProximity } from '../../../src/lib/proximity.ts';
 import type { DataPoint, SaaSDataPoint } from '../../../src/lib/types.ts';
@@ -103,6 +107,7 @@ interface TickRequest {
   /** Drill mode: run the full reason→rotate pipeline against synthetic
    *  trigger states WITHOUT persisting anything or placing any order.
    *  Verifies the Phase-2 playbook end-to-end before it's needed for real. */
+  scheduled?: boolean;
   drill?: 'fired_2' | 'fired_3' | 'kill_switch';
 }
 
@@ -185,11 +190,12 @@ Deno.serve(async (req: Request) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceKey);
+  let isDrill = false;
 
   try {
     const { data: config } = await supabase
       .from('agent_config')
-      .select('enabled, mode, phase, paper_mode, halted, halt_reason, active_sleeve_budget_pct')
+      .select('enabled, mode, phase, paper_mode, halted, halted_at, halt_reason, active_sleeve_budget_pct')
       .eq('id', 1)
       .single();
 
@@ -198,7 +204,23 @@ Deno.serve(async (req: Request) => {
     }
 
     const body: TickRequest = await req.json().catch(() => ({}));
-    const tickType: TickType = body.tick_type ?? 'close';
+    let tickType: TickType = body.tick_type ?? 'close';
+    if (body.drill && !DRILL_LEVELS.has(body.drill)) return json({ error: 'Unknown drill' }, 400);
+    isDrill = !!body.drill;
+    const dataIssues: string[] = [];
+    let scheduleKey: string | null = null;
+    if (body.scheduled && !isDrill) {
+      const now = new Date();
+      const session = await getMarketSession(alpacaFromEnv(config.paper_mode !== false), easternParts(now).date);
+      const due = scheduledTick(now, session);
+      if (!due) return json({ skipped: true, reason: 'No scheduled check due in this exchange session' });
+      tickType = due;
+      scheduleKey = `${easternParts(now).date}:${due}`;
+      const fredSeries = Object.values(FRED);
+      const { data: refresh, error: refreshError } = await supabase.functions.invoke('fetch-fred', { body: { series: fredSeries } });
+      if (refreshError || fredSeries.some(id => !refresh?.results?.[id])) dataIssues.push('Pre-report FRED refresh incomplete; using stored observations with their dates');
+    }
+
 
     const [jolts, claims, sp500, caseShiller, vix, hyOas, continuedClaims, saasSeries] = await Promise.all([
       loadSeries(supabase, FRED.jolts),
@@ -213,6 +235,10 @@ Deno.serve(async (req: Request) => {
 
     const saas = mergeSaasSeries(saasSeries);
     const result = computeSignals({ jolts, claims, sp500, caseShiller, saas, hyOas });
+
+    dataIssues.push(...result.signals.filter(s => s.qualityIssue).map(s => `${s.key}: ${s.qualityIssue}`));
+    if (!fresh(vix.filter(d => d.value != null).at(-1)?.date, 7)) dataIssues.push('VIX observation missing or stale');
+    const operatingState = () => ({ halted: Boolean(config.halted), haltedAt: config.halted_at ?? null, haltReason: config.halt_reason ?? null, dataIssues });
 
     const drift: DriftSummary = {
       jolts: weekOverWeek(jolts),
@@ -243,7 +269,7 @@ Deno.serve(async (req: Request) => {
         // Reconcile fills FIRST so this tick reasons over real order outcomes
         // (and backfills terminal states for historical 'submitted' rows).
         try {
-          const rec = await reconcileOrders(supabase, creds);
+          const rec = isDrill ? { updated: 0, errors: [] } : await reconcileOrders(supabase, creds);
           if (rec.updated > 0 || rec.errors.length > 0) {
             console.log('reconcile:', JSON.stringify(rec));
           }
@@ -261,6 +287,10 @@ Deno.serve(async (req: Request) => {
             return [] as TapeReading[];
           }),
         ]);
+        const { data: priorAccount, error: priorAccountError } = await supabase.from('agent_equity_snapshots')
+          .select('equity, cash, gross_exposure').order('taken_at', { ascending: false }).limit(1).maybeSingle();
+        const accountIssue = priorAccountError ? 'Prior account evidence unavailable' : accountQuality(acct, pos, priorAccount);
+        if (accountIssue) throw new Error(accountIssue);
         accountSummary = {
           equity: acct.equity,
           cash: acct.cash,
@@ -309,7 +339,7 @@ Deno.serve(async (req: Request) => {
         // ————— measurement layer (M0) —————
         // Equity snapshot + meta indices land every tick with account state.
         // Best-effort: a failed insert must never block the digest.
-        await writeMeasurement(supabase, {
+        if (!isDrill) await writeMeasurement(supabase, {
           tickType,
           account: acct,
           positions: pos,
@@ -320,7 +350,9 @@ Deno.serve(async (req: Request) => {
           console.warn('writeMeasurement failed (non-fatal):', String(e).slice(0, 200)),
         );
       } catch (e) {
-        console.warn('Alpaca state load failed (non-fatal):', String(e).slice(0, 200));
+        dataIssues.push(`Account or market evidence unavailable: ${String(e).slice(0, 200)}`);
+        accountSummary = undefined; positionSummaries = undefined; activeSleeve = undefined;
+        console.warn('Alpaca state load failed:', String(e).slice(0, 200));
       }
     }
 
@@ -336,7 +368,7 @@ Deno.serve(async (req: Request) => {
     // Trigger Proximity Index (weekly ticks): distance × velocity → ETA per
     // trigger. THE early-warning read for the "delayed realization" question.
     let proximity: TriggerProximity[] | undefined;
-    if (tickType === 'weekly') {
+    if (tickType === 'weekly' && !isDrill) {
       try {
         proximity = computeProximity({
           jolts,
@@ -364,6 +396,7 @@ Deno.serve(async (req: Request) => {
       const reasoned = await runReasoner({
         tickType,
         signals: drillSignals,
+        operationalState: operatingState(),
         drift,
         recentDigests,
         account: accountSummary,
@@ -392,17 +425,6 @@ Deno.serve(async (req: Request) => {
         loadPlaybook: (level) => buildPlaybookProposals(supabase, level, tapeForPlaybook),
         dryRun: true,
       });
-      await deliverDigest({
-        tick_type: tickType,
-        phase: drillSignals.phase,
-        fired_count: drillSignals.firedCount,
-        kill_switch_triggered: kill || reasoned.kill_switch_triggered,
-        narrative: `🧪 [DRILL — no orders were placed, nothing was saved] ${reasoned.narrative}`,
-        proposals: drillExec.planned ?? reasoned.proposals,
-        drift_notes: reasoned.drift_notes,
-        active_sleeve: activeSleeve ?? null,
-        reasoner_status: reasoned.status,
-      });
       return json({
         ok: true,
         drill: body.drill,
@@ -418,6 +440,7 @@ Deno.serve(async (req: Request) => {
       .from('agent_snapshots')
       .insert({
         tick_type: tickType,
+        scheduled_key: scheduleKey,
         signals: {
           firedCount: result.firedCount,
           phase: result.phase,
@@ -434,6 +457,7 @@ Deno.serve(async (req: Request) => {
       .select('tick_id')
       .single();
 
+    if (snapError?.code === '23505' && scheduleKey) return json({ skipped: true, reason: 'Scheduled check already recorded' });
     if (snapError) throw new Error(`agent_snapshots insert failed: ${snapError.message}`);
 
     // Call the reasoner. On any failure (after internal retry), fall through to
@@ -443,6 +467,7 @@ Deno.serve(async (req: Request) => {
       const reasoned = await runReasoner({
         tickType,
         signals: result,
+        operationalState: operatingState(),
         drift,
         recentDigests,
         account: accountSummary,
@@ -462,7 +487,8 @@ Deno.serve(async (req: Request) => {
         phase: result.phase,
         fired_count: result.firedCount,
         kill_switch_triggered: reasoned.kill_switch_triggered,
-        narrative: reasoned.narrative,
+        narrative: 'Evidence report pending execution reconciliation.',
+        model_narrative: reasoned.narrative,
         proposals: reasoned.proposals,
         drift_notes: reasoned.drift_notes,
         scorecard: tickType === 'weekly' ? reasoned.scorecard : null,
@@ -511,41 +537,22 @@ Deno.serve(async (req: Request) => {
         .eq('id', 1);
     }
 
-    // Deliver. Never throws — sparse failures just land as delivered_* = false
-    // on the digest row + a warning log.
-    const delivery = await deliverDigest({
-      tick_type: tickType,
-      phase: result.phase,
-      fired_count: result.firedCount,
-      kill_switch_triggered: Boolean(digestRow.kill_switch_triggered),
-      narrative: String(digestRow.narrative),
-      proposals: (digestRow.proposals as Proposal[] | undefined) ?? [],
-      drift_notes: (digestRow.drift_notes as string | null) ?? null,
-      active_sleeve: activeSleeve ?? null,
-      reasoner_status: String(digestRow.reasoner_status),
-      proximity: proximity ?? null,
-    });
-    await supabase
-      .from('agent_digests')
-      .update({
-        delivered_email: delivery.delivered_email,
-        delivered_slack: delivery.delivered_slack,
-      })
-      .eq('id', insertedDigest.id);
-
     // Execute when mode=auto_execute AND phase != shadow.
-    const execPhase = (config.phase ?? 'shadow') as 'shadow' | 'paper' | 'small_live' | 'scale';
+    const { data: latestConfig, error: configReloadError } = await supabase.from('agent_config').select('enabled, mode, phase, paper_mode, halted, halted_at, halt_reason').eq('id', 1).single();
+    if (configReloadError || !latestConfig) dataIssues.push('Execution configuration could not be reloaded');
+    const execPhase = (latestConfig?.phase ?? config.phase ?? 'shadow') as 'shadow' | 'paper' | 'small_live' | 'scale';
     const execConfig = {
-      halted: Boolean(config.halted),
-      halt_reason: (config.halt_reason as string | null) ?? null,
+      halted: latestConfig?.halted !== false,
+      halt_reason: (latestConfig?.halt_reason as string | null) ?? null,
       phase: execPhase,
-      paper_mode: config.paper_mode !== false,
+      paper_mode: latestConfig?.paper_mode !== false,
     };
     let execution = null;
-    if (config.mode === 'auto_execute' && execPhase !== 'shadow') {
+    let executionError: string | null = digestRow.reasoner_status === 'fallback_unavailable' ? 'Reasoner unavailable; no proposals executed' : null;
+    if (latestConfig?.enabled && latestConfig.mode === 'auto_execute' && !latestConfig.halted && dataIssues.length === 0 && execPhase !== 'shadow') {
       const supa = buildExecutionSupa(supabase);
       const tapeForPlaybook = new Map((tapeQuotes ?? []).map((t) => [t.ticker, t.price] as const));
-      execution = await orchestrateExecution({
+      try { execution = await orchestrateExecution({
         digestId: insertedDigest.id,
         config: execConfig,
         proposals: (digestRow.proposals as Proposal[] | undefined) ?? [],
@@ -554,7 +561,55 @@ Deno.serve(async (req: Request) => {
         supa,
         loadPlaybook: (level) => buildPlaybookProposals(supabase, level, tapeForPlaybook),
       });
+      executionError = execution.errors.length ? execution.errors.join('; ') : null;
+      } catch (e) { executionError = String(e).slice(0, 400); }
     }
+
+    // Report only after the executor has finished; never infer fills from proposals.
+    const [orderEvidence, approvalEvidence] = await Promise.all([
+      supabase.from('agent_orders').select('ticker, status, alpaca_order_id, rejection_reason').eq('digest_id', insertedDigest.id),
+      supabase.from('agent_approvals').select('id', { count: 'exact', head: true }).eq('digest_id', insertedDigest.id),
+    ]);
+    const report = makeReport({
+      observedAt: new Date().toISOString(), mode: latestConfig?.mode ?? 'unknown',
+      halted: latestConfig ? Boolean(latestConfig.halted) : null,
+      haltedAt: latestConfig?.halted_at ?? null, haltReason: latestConfig?.halt_reason ?? null,
+      dataIssues, equity: accountSummary?.equity ?? null, positions: positionSummaries,
+      signals: result.signals, orders: orderEvidence.error ? null : orderEvidence.data,
+      approvals: approvalEvidence.error ? null : approvalEvidence.count,
+      executionError, relativeReturn: activeSleeve?.momentum.saasVsAi20d ?? null,
+    });
+    const narrative = reportText(report);
+    const { error: reportError } = await supabase.from('agent_digests').update({
+      narrative, operational_report: report, delivery_fingerprint: reportFingerprint(report),
+    }).eq('id', insertedDigest.id);
+    if (reportError) throw new Error(`Evidence report persistence failed: ${reportError.message}`);
+    const { data: previous, error: deliveryHistoryError } = await supabase.from('agent_digests')
+      .select('delivery_fingerprint, operational_report, delivered_email, delivered_slack')
+      .neq('id', insertedDigest.id).or('delivered_email.eq.true,delivered_slack.eq.true')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    const previousReport = previous?.operational_report;
+    const due = !!deliveryHistoryError || shouldDeliver(report, tickType, previousReport ? {
+      fingerprint: previous.delivery_fingerprint, observedAt: previousReport.observedAt,
+    } : null);
+    const { data: receipts } = previousReport ? await supabase.from('agent_digests')
+      .select('delivered_email, delivered_slack').eq('delivery_fingerprint', reportFingerprint(report))
+      .gte('created_at', easternDayStart(new Date(previousReport.observedAt))).limit(1000) : { data: [] };
+    const channels = deliveryChannels(due, {
+      email: !!Deno.env.get('RESEND_API_KEY') && !!Deno.env.get('DIGEST_EMAIL_TO'),
+      slack: !!Deno.env.get('SLACK_WEBHOOK_URL'),
+    }, receipts ?? []);
+    const send = channels.email || channels.slack;
+    const delivery = send ? await deliverDigest({
+      tick_type: tickType, phase: result.phase, fired_count: result.firedCount,
+      kill_switch_triggered: Boolean(digestRow.kill_switch_triggered),
+      narrative, proposals: [], drift_notes: null, active_sleeve: activeSleeve ?? null,
+      reasoner_status: String(digestRow.reasoner_status), operational_report: report,
+    }, channels) : { delivered_email: false, delivered_slack: false, errors: [] };
+    await supabase.from('agent_digests').update({ ...{
+      delivered_email: delivery.delivered_email, delivered_slack: delivery.delivered_slack,
+      delivery_suppressed: !send,
+    } }).eq('id', insertedDigest.id);
 
     return json({
       ok: true,
@@ -567,7 +622,7 @@ Deno.serve(async (req: Request) => {
       // Surface the narrative so fallback reason is visible in the response
       // without needing to query the DB. For the real narrative this just
       // returns the first ~400 chars of Claude's output.
-      narrative_preview: String(digestRow.narrative).slice(0, 400),
+      narrative_preview: narrative.slice(0, 400),
       delivery: {
         email: delivery.delivered_email,
         slack: delivery.delivered_slack,
@@ -576,7 +631,7 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     console.error('agent-tick failed:', err);
-    await incrementDeadman(supabase, String(err));
+    if (!isDrill) await incrementDeadman(supabase, String(err));
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
@@ -586,14 +641,14 @@ Deno.serve(async (req: Request) => {
 
 // ——— helpers ———
 
-async function loadSeries(supabase: ReturnType<typeof createClient>, seriesId: string): Promise<DataPoint[]> {
+async function loadSeries(supabase: SupabaseClient, seriesId: string): Promise<DataPoint[]> {
   const { data, error } = await supabase
     .from('economic_data')
     .select('date, value')
     .eq('series_id', seriesId)
-    .order('date', { ascending: true });
+    .order('date', { ascending: false }).limit(1000);
   if (error) throw new Error(`loadSeries(${seriesId}) failed: ${error.message}`);
-  return (data ?? []).map((d) => ({ date: d.date as string, value: d.value as number | null }));
+  return (data ?? []).reverse().map((d) => ({ date: d.date as string, value: d.value as number | null }));
 }
 
 // Headline shipping metrics the reasoner should see. Kept compact (~6) to
@@ -609,7 +664,7 @@ const SHIPPING_HEADLINES: Array<{ source: string; metric: string; label: string 
 ];
 
 async function loadShippingPulse(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): Promise<ShippingPulseSummary | undefined> {
   try {
     const [wowRes, statusRes] = await Promise.all([
@@ -683,7 +738,7 @@ async function loadShippingPulse(
 }
 
 async function loadRecentDigests(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   limit: number,
 ): Promise<RecentDigest[]> {
   const { data, error } = await supabase
@@ -749,43 +804,12 @@ function weekOverWeek(data: DataPoint[]): WowSummary {
   };
 }
 
-const SAAS_FIELD_BY_TICKER: Record<(typeof SAAS_TICKERS)[number], keyof Omit<SaaSDataPoint, 'date'>> = {
-  NOW: 'servicenow',
-  CRM: 'salesforce',
-  HUBS: 'hubspot',
-  WDAY: 'workday',
-  FRSH: 'freshworks',
-};
 
-function returnOverBars(bars: DailyBar[] | undefined, lookback: number): number | null {
-  if (!bars || bars.length < lookback + 1) return null;
-  const last = bars[bars.length - 1]?.close;
-  const prior = bars[bars.length - 1 - lookback]?.close;
-  if (!last || !prior) return null;
-  return ((last - prior) / prior) * 100;
-}
 
 function avgNonNull(vals: Array<number | null>): number | null {
   const clean = vals.filter((v): v is number => v != null && Number.isFinite(v));
   if (clean.length === 0) return null;
   return clean.reduce((s, v) => s + v, 0) / clean.length;
-}
-
-function latestSaasRow(saas: SaaSDataPoint[]): SaaSDataPoint | null {
-  for (let i = saas.length - 1; i >= 0; i--) {
-    const row = saas[i];
-    if (SAAS_TICKERS.some((t) => row[SAAS_FIELD_BY_TICKER[t]] != null)) return row;
-  }
-  return null;
-}
-
-function priorSaasRow(saas: SaaSDataPoint[], latestDate: string): SaaSDataPoint | null {
-  for (let i = saas.length - 1; i >= 0; i--) {
-    const row = saas[i];
-    if (row.date >= latestDate) continue;
-    if (SAAS_TICKERS.some((t) => row[SAAS_FIELD_BY_TICKER[t]] != null)) return row;
-  }
-  return null;
 }
 
 type SleeveStance = ActiveSleeveSummary['stance'];
@@ -816,7 +840,7 @@ function stanceWithHysteresis(score: number, prior: SleeveStance | null): Sleeve
 
 /** Latest persisted TAI reading (smoothed score + stance) for hysteresis. */
 async function loadPriorTai(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): Promise<{ score: number; stance: SleeveStance } | null> {
   const { data, error } = await supabase
     .from('meta_indices')
@@ -825,7 +849,8 @@ async function loadPriorTai(
     .order('observed_at', { ascending: false })
     .limit(1);
   if (error || !data || data.length === 0) return null;
-  const row = data[0] as { value: number; detail: { stance?: string } | null };
+  const row = data[0] as { value: number; detail: { stance?: string; version?: string } | null };
+  if (row.detail?.version !== EVIDENCE_VERSION) return null;
   const stance = row.detail?.stance;
   const valid: SleeveStance[] = ['inactive', 'watch', 'probe', 'press'];
   return {
@@ -848,27 +873,13 @@ function buildActiveSleeveSummary(input: {
   /** Net delta-adjusted directional exposure in USD (null = greeks missing). */
   netDeltaExposureValue: number | null;
 }): ActiveSleeveSummary {
-  const latest = latestSaasRow(input.saas);
-  const prior = latest ? priorSaasRow(input.saas, latest.date) : null;
-  const latestAvg = latest
-    ? avgNonNull(SAAS_TICKERS.map((t) => latest[SAAS_FIELD_BY_TICKER[t]]))
-    : null;
-  const priorAvg = prior
-    ? avgNonNull(SAAS_TICKERS.map((t) => prior[SAAS_FIELD_BY_TICKER[t]]))
-    : null;
-  const revenueDelta = latestAvg != null && priorAvg != null ? latestAvg - priorAvg : null;
-  const deterioratingTickers = latest && prior
-    ? SAAS_TICKERS.filter((t) => {
-      const field = SAAS_FIELD_BY_TICKER[t];
-      const now = latest[field];
-      const before = prior[field];
-      return now != null && before != null && now < before - 1;
-    })
-    : [];
+  const { latestAvg, priorAvg, delta: revenueDelta, deterioratingTickers } = revenueTrend(input.saas);
 
-  const saas20d = avgNonNull(SAAS_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
-  const ai20d = avgNonNull(AI_WINNER_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
-  const creditStress20d = avgNonNull(CREDIT_STRESS_TICKERS.map((t) => returnOverBars(input.bars.get(t), 20)));
+  const returns = alignedReturns(input.bars, [...new Set([...SAAS_TICKERS, ...AI_WINNER_TICKERS, ...CREDIT_STRESS_TICKERS])]);
+  if (!returns) throw new Error('Fast signal unavailable: incomplete, stale or misaligned market baskets');
+  const saas20d = avgNonNull(SAAS_TICKERS.map(t => returns.get(t) ?? null));
+  const ai20d = avgNonNull(AI_WINNER_TICKERS.map((t) => returns.get(t) ?? null));
+  const creditStress20d = avgNonNull(CREDIT_STRESS_TICKERS.map((t) => returns.get(t) ?? null));
   const saasVsAi20d = saas20d != null && ai20d != null ? saas20d - ai20d : null;
 
   // Software-vs-market relative strength: IGV/QQQ daily close ratio over the
@@ -884,7 +895,7 @@ function buildActiveSleeveSummary(input: {
       const q = qqqByDate.get(b.asOf.slice(0, 10));
       if (q && q > 0) ratios.push(b.close / q);
     }
-    if (ratios.length > 5) {
+    if (ratios.length >= 60) {
       igvQqqRatio = ratios[ratios.length - 1];
       const window = ratios.slice(-60);
       igvQqq60dLow = igvQqqRatio <= Math.min(...window);
@@ -1062,7 +1073,7 @@ function roundStrike(v: number): number {
  *  proposals: expiries mapped to real months, strikes anchored to live tape.
  *  Option steps with no tape for the underlying are skipped (logged). */
 async function buildPlaybookProposals(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   level: 'fired_2' | 'fired_3',
   tapeByTicker: Map<string, number>,
 ): Promise<Proposal[]> {
@@ -1136,7 +1147,7 @@ async function computeNetDeltaExposure(
     greeksSeen++;
     total += delta * 100 * p.qty * spot;
   }
-  return greeksSeen > 0 ? total : null;
+  return greeksSeen === optionPositions.length ? total : null;
 }
 
 // ————— measurement layer (M0) —————
@@ -1154,7 +1165,7 @@ interface MeasurementInput {
  *  the system's memory of its own performance — without them no Sharpe,
  *  drawdown, alpha-vs-benchmark, or stance history is computable. */
 async function writeMeasurement(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   input: MeasurementInput,
 ): Promise<void> {
   const { account, positions, activeSleeve, tape, tickType, firedCount } = input;
@@ -1183,7 +1194,7 @@ async function writeMeasurement(
     {
       key: 'tai',
       value: activeSleeve.score,
-      detail: { stance: activeSleeve.stance, reasons: activeSleeve.reasons },
+      detail: { version: EVIDENCE_VERSION, stance: activeSleeve.stance, reasons: activeSleeve.reasons },
     },
     { key: 'fired_count', value: firedCount },
   ];
@@ -1213,7 +1224,7 @@ async function writeMeasurement(
 
 /** Earnings within the next 21 days for the whitelist SaaS/AI names. */
 async function loadUpcomingEarnings(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): Promise<UpcomingEarnings[]> {
   const today = new Date().toISOString().slice(0, 10);
   const horizon = new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10);
@@ -1232,7 +1243,7 @@ async function loadUpcomingEarnings(
 
 /** Latest news-pulse features (last 36h) per ticker, pivoted for the prompt. */
 async function loadNewsPulse(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): Promise<NewsPulseReading[]> {
   const since = new Date(Date.now() - 36 * 3_600_000).toISOString();
   const { data, error } = await supabase
@@ -1274,7 +1285,7 @@ async function loadNewsPulse(
 
 /** Last-48h order outcomes for the reasoner's context window. */
 async function loadRecentOrders(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): Promise<RecentOrderOutcome[]> {
   const since = new Date(Date.now() - 48 * 3_600_000).toISOString();
   const { data, error } = await supabase
@@ -1291,7 +1302,7 @@ async function loadRecentOrders(
 }
 
 async function incrementDeadman(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   reason: string,
 ): Promise<void> {
   const { data: config } = await supabase
@@ -1321,7 +1332,7 @@ function json(body: unknown, status = 200): Response {
 // Bridges the generic ExecutionSupabase interface in execute.ts to concrete
 // supabase-js calls, scoped to a single digest's execution run.
 function buildExecutionSupa(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
 ): ExecutionSupabase {
   return {
     async insertOrder(row: AgentOrderRow) {
@@ -1350,14 +1361,12 @@ function buildExecutionSupa(
     },
     async todayOrders(): Promise<PriorOrderSummary[]> {
       // "Today" in ET — agent-tick runs on US market hours.
-      const etToday = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const { data, error } = await supabase
         .from('agent_orders')
         .select('notional_usd, instrument, status, created_at')
-        .gte('created_at', `${etToday}T00:00:00-05:00`);
+        .gte('created_at', easternDayStart(new Date()));
       if (error) {
-        console.warn(`todayOrders query failed: ${error.message}`);
-        return [];
+        throw new Error(`todayOrders query failed: ${error.message}`);
       }
       return (data ?? []) as PriorOrderSummary[];
     },

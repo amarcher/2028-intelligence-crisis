@@ -1,3 +1,4 @@
+import { easternDayStart } from '../../../src/lib/marketSession.ts';
 // Supabase Edge Function: agent-queue-flush
 //
 // Places orders that agent-tick queued while the market was closed. The
@@ -22,7 +23,7 @@ import {
 import { isInMarketHours, validateTrade, type GuardrailContext, type PriorOrderSummary } from '../agent-tick/guardrails.ts';
 import { buildOrderPlan, executeSpreadProposal, placeSmartOrder, sideFromAction } from '../agent-tick/execute.ts';
 import { reconcileOrders } from '../agent-tick/reconcile.ts';
-import { sendTradeAlert } from '../agent-tick/alerts.ts';
+import { sendTradeAlert, sendExecutionSummary } from '../agent-tick/alerts.ts';
 import type { Proposal } from '../agent-tick/reasoner.ts';
 
 interface QueuedOrderRow {
@@ -34,10 +35,6 @@ interface QueuedOrderRow {
   side: 'buy' | 'sell';
   notional_usd: number | null;
   proposal: Proposal | null;
-}
-
-function etToday(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 Deno.serve(async () => {
@@ -65,7 +62,7 @@ Deno.serve(async () => {
       return json({ skipped: true, reason: 'agent disabled / signal-only / shadow phase' });
     }
 
-    const todayStart = `${etToday()}T00:00:00-05:00`;
+    const todayStart = easternDayStart(new Date());
 
     // Expire yesterday's leftovers first — stale proposals must not execute.
     const { data: expiredRows, error: expireErr } = await supabase
@@ -271,6 +268,8 @@ Deno.serve(async () => {
           rationale: `${p.rationale} (queued at ${row.created_at.slice(11, 16)} UTC, placed at the open)`,
           exit_condition: p.exit_condition,
           alpaca_order_id: orderRes.id,
+        broker_status: orderRes.status,
+        filled_qty: orderRes.filled_qty,
         });
         if (!alertRes.ok) summary.errors.push(`trade alert ${p.ticker}: ${alertRes.error ?? 'unknown'}`);
       } catch (e) {
@@ -295,11 +294,17 @@ Deno.serve(async () => {
         .select('id, kind, proposals, digest_id')
         .eq('status', 'approved')
         .eq('executed', false)
+        .eq('execution_status', 'pending')
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: true })
         .limit(3);
 
       for (const approval of approvals ?? []) {
+        const { data: claimed, error: claimError } = await supabase.from('agent_approvals')
+          .update({ execution_status: 'running' }).eq('id', approval.id)
+          .eq('execution_status', 'pending').select('id').maybeSingle();
+        if (claimError || !claimed) continue;
+        const errorCountBefore = summary.errors.length;
         const executedActions: string[] = [];
         try {
           if (approval.kind === 'unwind_all') {
@@ -430,24 +435,19 @@ Deno.serve(async () => {
               }
             }
           }
+        } catch (e) {
+          summary.errors.push(`approval interrupted: ${String(e).slice(0, 200)}`);
         } finally {
           await supabase
             .from('agent_approvals')
-            .update({ executed: true })
+            .update({ executed: summary.errors.length === errorCountBefore,
+              execution_status: summary.errors.length === errorCountBefore ? 'submitted' : 'needs_review',
+              execution_errors: summary.errors.slice(errorCountBefore) })
             .eq('id', approval.id);
         }
         summary.placed += executedActions.length;
         if (executedActions.length > 0) {
-          await sendTradeAlert({
-            action: approval.kind === 'unwind_all' ? 'close' : 'open',
-            side: 'sell',
-            ticker: 'PORTFOLIO',
-            instrument: 'equity',
-            qty: executedActions.length,
-            notional_usd: null,
-            rationale: `Your approval went through — the agent executed ${executedActions.length} step${executedActions.length === 1 ? '' : 's'}: ${executedActions.join(', ')}.`,
-            exit_condition: 'Each new position is managed by the automatic exit rules.',
-          });
+          await sendExecutionSummary(executedActions);
         }
       }
     }

@@ -24,3 +24,6 @@ supabase/.temp/
 *.sln
 *.sw?
 .vercel
+
+# Local operational evidence may include private account data.
+docs/audits/

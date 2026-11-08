@@ -91,7 +91,7 @@ export function computeProximity(input: ProximityInput): TriggerProximity[] {
 
   // Claims: 4-week average above 300K. Reference floor 200K.
   const last4 = input.claims.filter((d) => d.value != null).slice(-4);
-  const claimsAvg = last4.length > 0 ? last4.reduce((s, d) => s + (d.value ?? 0), 0) / last4.length : null;
+  const claimsAvg = last4.length === 4 ? last4.reduce((s, d) => s + (d.value ?? 0), 0) / last4.length : null;
   out.push({
     key: 'claims',
     label: 'Unemployment filings',
@@ -156,17 +156,22 @@ export function computeProximity(input: ProximityInput): TriggerProximity[] {
     note: 'year-over-year change must turn negative',
   });
 
-  // Credit: OAS ≥ 3.5%. Reference floor 2.5%.
+  // Distance to the level only; firing also requires five-session persistence.
   const oasNow = input.hyOas ? lastNonNull(input.hyOas)?.value ?? null : null;
+  const latestOas = input.hyOas ? lastNonNull(input.hyOas) : null;
+  const window = (input.hyOas ?? []).filter(p => p.value != null && latestOas && Date.parse(p.date) >= Date.parse(latestOas.date) - 90 * 86_400_000);
+  const low90 = window.length ? Math.min(...window.map(p => p.value!)) : null;
+  const creditLevel = low90 == null ? 3.5 : Math.max(3.5, low90 + 1);
+
   out.push({
     key: 'credit',
     label: 'Bond-market stress',
     current: oasNow,
-    threshold: 3.5,
+    threshold: creditLevel,
     direction: 'rising',
-    progressPct: progress(oasNow, 2.5, 3.5, 'rising'),
-    etaMonths: input.hyOas ? trendEta(oasNow, valueDaysAgo(input.hyOas, 90), 3.5, 'rising', 90) : null,
-    note: 'junk-bond risk premium must rise to 3.5% (plus a widening episode)',
+    progressPct: progress(oasNow, low90 ?? 2.5, creditLevel, 'rising'),
+    etaMonths: input.hyOas ? trendEta(oasNow, valueDaysAgo(input.hyOas, 90), creditLevel, 'rising', 90) : null,
+    note: `OAS must reach ${creditLevel.toFixed(2)}% and persist for five sessions; ETA covers the level only`,
   });
 
   return out;

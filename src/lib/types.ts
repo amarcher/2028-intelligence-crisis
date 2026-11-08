@@ -1,3 +1,4 @@
+import type { OperationalReport } from './operationalReport';
 export interface DataPoint {
   date: string;
   value: number | null;
@@ -59,7 +60,7 @@ export interface ArticleClaim {
 // ---------- agent (mirrors shapes written by supabase/functions/agent-tick) ----------
 
 export type AgentPhase = 'counterfactual_grind' | 'inflection';
-export type TickType = 'premarket' | 'close' | 'weekly';
+export type TickType = 'premarket' | 'midday' | 'close' | 'weekly';
 
 export interface AgentProposal {
   action: 'open' | 'add' | 'trim' | 'close' | 'roll' | 'hold' | 'unwind_all';
@@ -80,6 +81,7 @@ export interface AgentProposal {
 }
 
 export interface AgentDigest {
+  operational_report?: OperationalReport | null;
   id: string;
   tick_id: string;
   created_at: string;
@@ -180,6 +182,8 @@ export type AgentApprovalKind =
 export type AgentApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
 
 export interface AgentApproval {
+  execution_status?: 'pending' | 'running' | 'submitted' | 'needs_review';
+  execution_errors?: string[];
   id: string;
   digest_id: string | null;
   created_at: string;

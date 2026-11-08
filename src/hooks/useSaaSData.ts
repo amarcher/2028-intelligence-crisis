@@ -11,13 +11,6 @@ interface UseSaaSDataResult {
   error: string | null;
 }
 
-function dbDateToQuarterLabel(date: string): string {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const quarter = Math.floor(d.getMonth() / 3) + 1;
-  return `${year}-Q${quarter}`;
-}
-
 function padSaaSToEnd(data: SaaSDataPoint[]): SaaSDataPoint[] {
   if (!data.length) return data;
   const last = data[data.length - 1].date;
@@ -62,7 +55,7 @@ export function useSaaSData(): UseSaaSDataResult {
   if (!nowResult.data || !crmResult.data ||
       !hubsResult.data || !frshResult.data ||
       !wdayResult.data || !ddogResult.data) {
-    return { data: SAAS_DATA, isLoading, error };
+    return { data: [], isLoading, error };
   }
 
   // Build lookup maps by date
@@ -84,7 +77,7 @@ export function useSaaSData(): UseSaaSDataResult {
   const sortedDates = [...allDates].sort();
 
   const merged: SaaSDataPoint[] = sortedDates.map((date) => ({
-    date: dbDateToQuarterLabel(date),
+    date,
     servicenow: nowMap.get(date) ?? null,
     salesforce: crmMap.get(date) ?? null,
     hubspot: hubsMap.get(date) ?? null,
@@ -94,8 +87,8 @@ export function useSaaSData(): UseSaaSDataResult {
   }));
 
   if (merged.length === 0) {
-    return { data: padSaaSToEnd(SAAS_DATA), isLoading, error };
+    return { data: [], isLoading, error };
   }
 
-  return { data: padSaaSToEnd(merged), isLoading, error };
+  return { data: merged, isLoading, error };
 }

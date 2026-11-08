@@ -1,3 +1,4 @@
+import { reportText, type OperationalReport } from '../../../src/lib/operationalReport.ts';
 // Digest delivery — Resend email + Slack webhook.
 // Called after the digest row lands. Never throws: if a channel isn't
 // configured it silently no-ops; if it fails it logs and reports a false
@@ -11,9 +12,9 @@
 //   DASHBOARD_URL           — optional; included as a permalink in the digest
 
 import type { ActiveSleeveSummary, Proposal } from './reasoner.ts';
-import type { TriggerProximity } from '../../../src/lib/proximity.ts';
 
 export interface DigestPayload {
+  operational_report: OperationalReport;
   tick_type: 'premarket' | 'midday' | 'close' | 'weekly';
   phase: 'counterfactual_grind' | 'inflection';
   fired_count: number;
@@ -23,168 +24,18 @@ export interface DigestPayload {
   drift_notes: string | null;
   active_sleeve: ActiveSleeveSummary | null;
   reasoner_status: string;
-  /** Weekly report card: per-trigger distance + pace → ETA. Null on daily ticks. */
-  proximity?: TriggerProximity[] | null;
 }
 
-export interface DeliveryResult {
-  delivered_email: boolean;
-  delivered_slack: boolean;
-  errors: string[];
+export interface DeliveryResult { delivered_email: boolean; delivered_slack: boolean; errors: string[] }
+
+export function subject(d: DigestPayload): string {
+  const r = d.operational_report;
+  const status = r.halted == null ? 'status unknown' : r.halted ? 'trading halted' : 'halt flag clear';
+  return `[2028 Tracker · ${d.tick_type}] ${status} · ${d.fired_count}/6 thresholds crossed`;
 }
 
-// ——— subject / headline ———
-
-function phaseLabel(phase: DigestPayload['phase']): string {
-  return phase === 'inflection' ? 'Phase 2 · Action phase' : 'Phase 1 · Waiting phase';
-}
-
-function tickTypeLabel(t: DigestPayload['tick_type']): string {
-  return t === 'premarket'
-    ? 'morning check'
-    : t === 'midday'
-      ? 'midday check (something moved)'
-      : t === 'close'
-        ? 'end-of-day check'
-        : 'weekly review';
-}
-
-function subject(d: DigestPayload): string {
-  if (d.kill_switch_triggered) {
-    return `[2028 Tracker] Abort signal — recommend closing all positions`;
-  }
-  if (d.reasoner_status.startsWith('fallback')) {
-    return `[2028 Tracker · ${tickTypeLabel(d.tick_type)}] reasoner unavailable`;
-  }
-  const phaseShort = d.phase === 'inflection' ? 'Action phase' : 'Waiting phase';
-  // Headline is the first sentence of the narrative, capped.
-  const firstSentence = d.narrative.split(/(?<=[.!?])\s/)[0].slice(0, 90);
-  return `[2028 Tracker · ${phaseShort} · ${d.fired_count}/6 readings crossed · ${tickTypeLabel(d.tick_type)}] ${firstSentence}`;
-}
-
-// ——— markdown body (shared between email + Slack mrkdwn) ———
-
-function actionLabel(action: string): string {
-  switch (action) {
-    case 'open': return 'BUY';
-    case 'add': return 'BUY MORE';
-    case 'trim': return 'SELL SOME';
-    case 'close': return 'SELL';
-    case 'roll': return 'REPLACE';
-    case 'hold': return 'HOLD';
-    case 'unwind_all': return 'CLOSE EVERYTHING';
-    default: return action.toUpperCase();
-  }
-}
-
-function sizeLabel(size: string): string {
-  switch (size) {
-    case 'starter': return 'small starter position';
-    case 'half': return 'half position';
-    case 'full': return 'full position';
-    case 'trim_third': return 'sell 1/3';
-    case 'trim_half': return 'sell 1/2';
-    default: return size.replace(/_/g, ' ');
-  }
-}
-
-function urgencyLabel(u: string): string {
-  switch (u) {
-    case 'act_today': return '🔥 do this today';
-    case 'this_week': return '↗ this week';
-    case 'waiting_for_trigger': return '○ waiting for a signal to cross';
-    default: return u.replace(/_/g, ' ');
-  }
-}
-
-function formatProposal(p: Proposal, i: number): string {
-  const instr = p.instrument === 'equity' ? '' : ` ${p.instrument.replace('_', ' ')}`;
-  const expiry = p.expiry ? ` ${p.expiry}` : '';
-  const strike = p.strike != null ? ` @${p.strike}` : '';
-  return `${i + 1}. *${actionLabel(p.action)}* ${p.ticker}${instr}${expiry}${strike} — _${sizeLabel(p.size_hint)}_ · ${urgencyLabel(p.urgency)}\n   ${p.rationale}`;
-}
-
-function fmtUsd(n: number): string {
-  const sign = n < 0 ? '-' : '';
-  return `${sign}$${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
-}
-
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
-}
-
-function formatActiveSleeve(active: ActiveSleeveSummary | null): string {
-  if (!active) return '';
-  const risk = active.riskBudget;
-  const perf = active.performance;
-  const sleeve = active.currentSleeve;
-  const lines = [
-    `*Active trading read:* ${active.stance.toUpperCase()} · ${active.score}/100`,
-    `SaaS vs AI: ${active.momentum.saasVsAi20d == null ? '—' : fmtPct(active.momentum.saasVsAi20d)} over 20 trading days ` +
-      `(SaaS ${active.momentum.saas20d == null ? '—' : fmtPct(active.momentum.saas20d)} · AI ${active.momentum.ai20d == null ? '—' : fmtPct(active.momentum.ai20d)})`,
-  ];
-  if (risk) {
-    lines.push(
-      `Risk room: ${risk.posture.replace(/_/g, ' ')} · ${fmtUsd(risk.activeSleeveRoomValue)} active room ` +
-        `(${risk.activeSleeveUsedPct.toFixed(0)}% of ${risk.activeSleeveBudgetPct}% sleeve used) · gross exposure ${fmtPct(risk.grossExposurePct)}` +
-        (risk.netDeltaExposurePct != null
-          ? ` · net market exposure ${fmtPct(risk.netDeltaExposurePct)} of the account (options counted by how much they actually move)`
-          : ''),
-    );
-  }
-  if (perf) {
-    lines.push(
-      `Portfolio: equity ${fmtUsd(perf.equity)} · cash ${fmtUsd(perf.cash)} · today ${fmtUsd(perf.dayProfitLoss)} (${fmtPct(perf.dayProfitLossPct)})`,
-    );
-  }
-  if (sleeve) {
-    lines.push(
-      `Sleeve: SaaS puts ${fmtUsd(sleeve.saasPutValue)} (${fmtUsd(sleeve.saasPutProfitLoss)} profit/loss) · ` +
-        `AI longs ${fmtUsd(sleeve.aiLongValue)} · safe-haven ${fmtUsd(sleeve.defensiveValue)} · ` +
-        `SaaS add room ${fmtUsd(sleeve.addCapacityValue)}`,
-    );
-  }
-  if (active.reasons.length > 0) {
-    lines.push(`Why: ${active.reasons.join(' ')}`);
-  }
-  return `\n\n${lines.join('\n')}`;
-}
-
-function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
-  const header = d.kill_switch_triggered
-    ? `🛑 *Abort signal* — the economy is moving the opposite way from what we expected. The agent recommends closing every position.`
-    : `*${phaseLabel(d.phase)}* · ${d.fired_count} of 6 economic readings have crossed the danger line · _${tickTypeLabel(d.tick_type)}_`;
-
-  const drift = d.drift_notes ? `\n\n*This week's economic update:* ${d.drift_notes}` : '';
-  const activeSleeve = formatActiveSleeve(d.active_sleeve);
-  const reportCard = formatProximity(d.proximity ?? null);
-
-  const proposals =
-    d.proposals.length > 0
-      ? `\n\n*Suggested moves:*\n${d.proposals.map(formatProposal).join('\n\n')}`
-      : '';
-
-  const footer = dashboardUrl
-    ? `\n\n—\n<${dashboardUrl}|Open the dashboard>`
-    : '';
-
-  return `${header}\n\n${d.narrative}${activeSleeve}${drift}${reportCard}${proposals}${footer}`;
-}
-
-/** Weekly "how close is each danger line" report card, in plain English. */
-function formatProximity(prox: TriggerProximity[] | null): string {
-  if (!prox || prox.length === 0) return '';
-  const lines = prox.map((p) => {
-    const pct = p.progressPct != null ? `${Math.min(p.progressPct, 100)}% of the way there` : 'no read';
-    const eta =
-      p.etaMonths == null
-        ? 'not on track to cross at the current pace'
-        : p.etaMonths === 0
-          ? '*crossed*'
-          : `~${p.etaMonths} months away at the current pace`;
-    return `• ${p.label}: ${pct} · ${eta}`;
-  });
-  return `\n\n*How close is each danger line?*\n${lines.join('\n')}`;
+export function buildBody(d: DigestPayload, dashboardUrl: string | null): string {
+  return reportText(d.operational_report) + (dashboardUrl ? `\n\nDashboard: ${dashboardUrl}` : '');
 }
 
 // Light HTML conversion for email — keeps formatting legible in Gmail etc.
@@ -246,9 +97,7 @@ async function sendSlack(d: DigestPayload, dashboardUrl: string | null): Promise
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: subject(d), // fallback for notifications
-        blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: body } },
-        ],
+        blocks: body.match(/[\s\S]{1,2800}/g)?.map(text => ({ type: 'section', text: { type: 'mrkdwn', text } })),
       }),
     });
     if (!res.ok) {
@@ -262,12 +111,12 @@ async function sendSlack(d: DigestPayload, dashboardUrl: string | null): Promise
 
 // ——— entry ———
 
-export async function deliverDigest(d: DigestPayload): Promise<DeliveryResult> {
+export async function deliverDigest(d: DigestPayload, channels = { email: true, slack: true }): Promise<DeliveryResult> {
   const dashboardUrl = Deno.env.get('DASHBOARD_URL') ?? null;
 
   const [email, slack] = await Promise.all([
-    sendEmail(d, dashboardUrl),
-    sendSlack(d, dashboardUrl),
+    channels.email ? sendEmail(d, dashboardUrl) : Promise.resolve<{ ok: boolean; err?: string }>({ ok: false }),
+    channels.slack ? sendSlack(d, dashboardUrl) : Promise.resolve<{ ok: boolean; err?: string }>({ ok: false }),
   ]);
 
   const errors: string[] = [];

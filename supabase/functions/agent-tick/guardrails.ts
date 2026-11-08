@@ -1,3 +1,4 @@
+import { ORDER_SIZE_PCT } from '../../../src/lib/evidence.ts';
 // Hard-cap guardrail middleware.
 //
 // validateTrade(proposal, ctx) runs BEFORE any order hits Alpaca. Proposals
@@ -13,7 +14,7 @@
 // Phase-flip and unwind_all approvals are orchestrated at the execution
 // module level (Exec-4) — validateTrade handles per-proposal caps only.
 
-import type { Proposal, ProposalSizeHint } from './reasoner.ts';
+import type { Proposal } from './reasoner.ts';
 import type { AlpacaAccount, AlpacaPosition } from './alpaca.ts';
 import { WHITELIST } from './filter.ts';
 
@@ -39,15 +40,9 @@ export const TACTICAL_INVERSE_TICKERS = new Set(['SQQQ', 'SPXS']);
 // ————— size_hint → notional translation —————
 // For NEW positions (open/add), these map to a target % of account equity.
 // For trims, they're a % of the EXISTING position's market value.
-const NEW_POSITION_SIZE_PCT: Record<ProposalSizeHint, number> = {
-  starter: 1,
-  half: 2.5,
-  full: 4, // intentionally under the 5% per-ticket cap
-  trim_third: 1, // never a new position, but guard against misuse
-  trim_half: 1,
-};
+const NEW_POSITION_SIZE_PCT = ORDER_SIZE_PCT;
 
-const TRIM_FRACTION: Record<ProposalSizeHint, number> = {
+const TRIM_FRACTION: Record<Proposal['size_hint'], number> = {
   trim_third: 1 / 3,
   trim_half: 1 / 2,
   starter: 1 / 3,

@@ -1,3 +1,4 @@
+import { allocationPct, ORDER_SIZE_PCT } from '../../../src/lib/evidence.ts';
 // Anthropic reasoner for agent-tick.
 // Uses raw fetch against /v1/messages rather than the SDK — Deno + esm.sh
 // compatibility for the TS SDK is fiddly, and the API shape is stable enough
@@ -183,6 +184,7 @@ export interface NewsPulseReading {
 }
 
 export interface ReasonerInput {
+  operationalState: { halted: boolean; haltedAt: string | null; haltReason: string | null; dataIssues: string[] };
   tickType: TickType;
   signals: SignalsResult;
   drift: DriftSummary;
@@ -489,7 +491,7 @@ You receive the last 3 digests (or 8 on weekly ticks) plus — when the agent is
 Spread these across multiple ticks if the daily-gross cap is tight — 3–4 opens per tick is fine; don't try to build the whole book in one session.
 
 **Book-exists case.** Positions broadly match the playbook's Phase 1 book. Now you can "hold" intelligently. Examples where "hold" is correct:
-- Position value is within ~25% of target sizing (starter ~= 1% of equity) → no action
+- There are no configured per-ticker allocation targets. Starter/half/full describe incremental order notional, never a target holding weight. Never invent target amounts or say a holding is below target.
 - Counterfactual drift week but positions already sized → "hold, defensive carry intact"
 - Thesis-aligned drift but no triggers fired → "hold, LEAPS book working"
 
@@ -641,8 +643,8 @@ const TOOL: AnthropicTool = {
 
 // ---------- dynamic user message builder ----------
 function renderSignal(s: Signal): string {
-  const state = s.state === 'fired' ? '🔴 FIRED' : '○ pending';
-  return `- ${s.label} [${state}] — reading: ${s.reading} · trigger: ${s.threshold}`;
+  const state = s.state === 'unknown' ? 'UNKNOWN / STALE' : s.state === 'fired' ? '🔴 FIRED' : '○ pending';
+  return `- ${s.label} [${state}] — reading: ${s.reading} · trigger: ${s.threshold} · observation: ${s.asOf ?? 'unknown'} · ${s.qualityIssue ?? 'quality checks passed'}`;
 }
 
 function renderWow(label: string, wow: WowSummary): string {
@@ -820,7 +822,14 @@ export function buildUserMessage(input: ReasonerInput): string {
     tickType, signals, drift, recentDigests, account, positions, shippingPulse, tapeQuotes,
     optionChains, activeSleeve,
   } = input;
-  return `tick_type: ${tickType}
+  return `AUTHORITATIVE OPERATING STATE (overrides all trading instructions below):
+${JSON.stringify(input.operationalState)}
+If halted or dataIssues is nonempty: research-only, no open/add/roll/retry proposals. Never claim a halt cleared without the supplied flag. A proposal is not an order and a submitted order is not a fill. Do not narrate future actions as commitments. Past model digests are unverified interpretation, not operational evidence.
+Incremental order percentages of equity (NOT allocation targets): ${JSON.stringify(ORDER_SIZE_PCT)}
+Calculated current holding weights: ${(positions ?? []).map(p => `${p.ticker}: ${allocationPct(p.market_value, account?.equity ?? NaN)?.toFixed(2) ?? 'unknown'}% of account equity`).join('; ')}
+No per-ticker holding targets configured.
+
+tick_type: ${tickType}
 
 Account: ${renderAccount(account)}
 Current positions:

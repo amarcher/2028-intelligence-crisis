@@ -13,7 +13,7 @@ export default function PhaseFlipSignals() {
   const hyOas = useEconomicData(FRED_SERIES.hy_oas, 'hy_oas');
   const saas = useSaaSData();
 
-  const { signals, firedCount, phase, phaseLabel, verdict, playbook } = useMemo(
+  const { signals, firedCount, unknownCount, phase, phaseLabel, verdict, playbook } = useMemo(
     () =>
       computeSignals({
         jolts: jolts.data,
@@ -34,7 +34,7 @@ export default function PhaseFlipSignals() {
       <SectionCard
         number="06"
         title="The six economic readings we're watching"
-        quote="The prediction is right about what will happen — just not yet about when. Wait for the readings to confirm before betting on a downturn."
+        quote="Test the thesis against dated evidence, including evidence against it. These thresholds have not established predictive accuracy."
         verdict={verdict}
         accentColor={COLORS.accent}
       >
@@ -54,9 +54,9 @@ export default function PhaseFlipSignals() {
               {phaseLabel}
             </span>
             <span className="text-[11px] mt-0.5" style={{ color: COLORS.textDim }}>
-              {phaseFlipped
-                ? "Two or more readings have crossed the danger line — time to switch from the defensive setup to bets on a market drop."
-                : `Holding defensive positions. We wait until at least 2 of the ${signals.length} readings cross before betting heavily on a downturn.`}
+              {unknownCount ? `${unknownCount} readings unavailable or stale. No complete regime assessment.` : phaseFlipped
+                ? "Two or more readings have crossed their research thresholds. Trading requires separate risk checks and approvals."
+                : `Fewer than two of ${signals.length} thresholds crossed. This is not evidence that the thesis must eventually happen.`}
             </span>
           </div>
           <div className="flex items-baseline gap-1 font-display" style={{ color: phaseColor }}>
@@ -70,7 +70,7 @@ export default function PhaseFlipSignals() {
           {signals.map((s) => {
             const fired = s.state === 'fired';
             const stateColor = fired ? COLORS.accent : COLORS.textDim;
-            const stateLabel = fired ? VERDICT.confirmed.icon + ' CROSSED' : VERDICT.early.icon + ' NOT YET';
+            const stateLabel = s.state === 'unknown' ? 'DATA UNAVAILABLE' : fired ? VERDICT.confirmed.icon + ' CROSSED' : VERDICT.early.icon + ' NOT YET';
             return (
               <div
                 key={s.key}
@@ -105,10 +105,10 @@ export default function PhaseFlipSignals() {
                   {s.reading}
                 </div>
                 <div className="text-[10px] mt-0.5 font-mono" style={{ color: COLORS.textDim }}>
-                  danger line: {s.threshold}
+                  threshold: {s.threshold}<br />Observation: {s.asOf ?? 'unavailable'}
                 </div>
                 <div className="text-[11px] mt-1.5 leading-[1.45]" style={{ color: COLORS.text }}>
-                  {s.note}
+                  {s.qualityIssue ?? s.note}
                 </div>
               </div>
             );
@@ -117,7 +117,7 @@ export default function PhaseFlipSignals() {
 
         {/* Plan */}
         <div className="text-xs mt-3 leading-[1.6]" style={{ color: COLORS.textDim }}>
-          <strong style={{ color: phaseColor }}>What we're doing:</strong> {playbook}
+          <strong style={{ color: phaseColor }}>Research interpretation:</strong> {playbook}
         </div>
       </SectionCard>
     </div>

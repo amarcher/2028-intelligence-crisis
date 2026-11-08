@@ -110,7 +110,7 @@ function ProposalRow({ p }: { p: AgentProposal }) {
           )}
         </div>
         <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: COLORS.text }}>
-          {p.rationale}
+          Model rationale (unverified): {p.rationale}
         </div>
         {p.filter_flags && p.filter_flags.length > 0 && (
           <div className="flex gap-1.5 mt-1.5 flex-wrap">
@@ -147,6 +147,7 @@ function ProposalRow({ p }: { p: AgentProposal }) {
 function tickTypeText(t: AgentDigest['tick_type']): string {
   if (t === 'premarket') return 'MORNING';
   if (t === 'close') return 'END OF DAY';
+  if (t === 'midday') return 'EVENT CHECK';
   return 'WEEKLY';
 }
 
@@ -236,6 +237,14 @@ function ScorecardGrid({ scorecard }: { scorecard: AgentDigest['scorecard'] }) {
 }
 
 function LatestDigest({ digest }: { digest: AgentDigest }) {
+  if (!digest.operational_report) return (
+    <details className="rounded border p-3 my-3">
+      <summary className="cursor-pointer font-bold">Legacy model report · {new Date(digest.created_at).toLocaleString()} · operational claims unverified</summary>
+      <p className="my-2">Use the halt banner and order ledger for actual status. This older report may contain incorrect allocation math and action claims.</p>
+      <p className="whitespace-pre-line">{digest.narrative}</p>
+      {digest.proposals.map((p,i) => <ProposalRow key={i} p={p} />)}
+    </details>
+  );
   return (
     <div
       className="rounded-md p-4"
@@ -258,7 +267,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
         <TickTypeBadge tickType={digest.tick_type} />
         <PhaseBadge phase={digest.phase} />
         <span className="text-[12px] font-display font-extrabold" style={{ color: COLORS.textBright }}>
-          {digest.fired_count}/5 readings have crossed
+          {digest.fired_count}/6 readings have crossed
         </span>
         <span className="text-[11px] font-mono flex-1 text-right" style={{ color: COLORS.textDim }}>
           {timeAgo(digest.created_at)} · {new Date(digest.created_at).toLocaleString()}
@@ -266,7 +275,8 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
       </div>
 
       <div className="text-[14px] leading-[1.55] mb-3" style={{ color: COLORS.textBright }}>
-        {digest.narrative}
+        {!digest.operational_report && <p className="mb-2 font-bold">Legacy model report — operational claims unverified. Use the current halt banner and order ledger.</p>}
+        <div className="whitespace-pre-line">{digest.narrative}</div>
       </div>
 
       {digest.drift_notes && (
@@ -274,7 +284,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
           className="text-[12px] italic leading-[1.5] pl-3 mb-3"
           style={{ color: COLORS.textDim, borderLeft: `2px solid ${COLORS.accent}40` }}
         >
-          This week's economic update: {digest.drift_notes}
+          Model interpretation (unverified): {digest.drift_notes}
         </div>
       )}
 
@@ -284,7 +294,7 @@ function LatestDigest({ digest }: { digest: AgentDigest }) {
             className="text-[10px] font-bold tracking-[0.15em] font-mono mt-2"
             style={{ color: COLORS.textDim }}
           >
-            SUGGESTED MOVES ({digest.proposals.length})
+            MODEL PROPOSALS — NOT ORDER EVIDENCE ({digest.proposals.length})
           </div>
           {digest.proposals.map((p, i) => (
             <ProposalRow key={`${digest.id}-${i}`} p={p} />
@@ -334,7 +344,7 @@ function HistoryRow({ d }: { d: AgentDigest }) {
         <TickTypeBadge tickType={d.tick_type} />
         <PhaseBadge phase={d.phase} />
         <span className="text-[11px] font-mono font-bold" style={{ color: COLORS.textBright }}>
-          {d.fired_count}/5
+          {d.fired_count}/6
         </span>
         {d.kill_switch_triggered && (
           <span
@@ -357,7 +367,7 @@ function HistoryRow({ d }: { d: AgentDigest }) {
       {open && (
         <div className="px-3 pb-3 pt-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
           <div className="text-[13px] leading-[1.5] mb-2" style={{ color: COLORS.textBright }}>
-            {d.narrative}
+            <div className="whitespace-pre-line">{!d.operational_report && <strong>Legacy model report — unverified. </strong>}{d.narrative}</div>
           </div>
           {d.drift_notes && (
             <div
@@ -390,23 +400,23 @@ function StatusStrip({
   digestCount: number;
 }) {
   const enabled = config?.enabled ?? false;
-  const enabledSignal: 'alarming' | 'reassuring' = enabled ? 'reassuring' : 'alarming';
-  const phaseValue = config?.phase ?? 'shadow';
-  const execMode = config?.mode === 'auto_execute' ? 'EXECUTING' : 'SIGNAL ONLY';
+  const enabledSignal: 'alarming' | 'reassuring' = enabled && !config?.halted ? 'reassuring' : 'alarming';
+  const phaseValue = config?.phase ?? 'unknown';
+  const execMode = config?.halted ? 'ORDERS HALTED' : config?.mode === 'auto_execute' ? 'AUTO MODE CONFIGURED' : 'SIGNAL ONLY';
   const paperLabel = config?.paper_mode ? 'paper' : 'LIVE';
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
       <MiniStat
         label="AGENT"
-        value={enabled ? 'RUNNING' : 'PAUSED'}
+        value={!config ? 'UNKNOWN' : config.halted ? 'HALTED' : enabled ? 'MONITORING' : 'PAUSED'}
         change={config?.killed_reason ? `stopped: ${config.killed_reason.slice(0, 50)}` : config ? `${execMode} · ${paperLabel}` : 'no config'}
         signal={enabledSignal}
       />
       <MiniStat
         label="EXECUTION MODE"
         value={phaseValue.replace('_', ' ').toUpperCase()}
-        change={latest ? `latest digest: ${latest.phase === 'inflection' ? 'Action phase' : 'Waiting phase'} · ${latest.fired_count}/5 readings` : 'no digests yet'}
+        change={latest ? `latest digest: ${latest.phase === 'inflection' ? 'Action phase' : 'Waiting phase'} · ${latest.fired_count}/6 readings` : 'no digests yet'}
         signal={phaseValue === 'small_live' || phaseValue === 'scale' ? 'alarming' : 'neutral'}
       />
       <MiniStat
@@ -536,7 +546,7 @@ function ActiveSleeveStrip({ active }: { active: ActiveSleeveSnapshot | undefine
           <MiniStat
             label="ADD ROOM"
             value={addAllowed ? fmtUsd(addCapacityValue) : 'NO'}
-            change={addAllowed ? 'before SaaS exceeds offsets' : `${fmtUsd(addCapacityValue)} over cap`}
+            change={addAllowed ? 'budget calculation, not permission to trade' : `${fmtUsd(addCapacityValue)} over cap`}
             signal={addAllowed ? 'reassuring' : 'alarming'}
           />
         </div>
@@ -577,7 +587,7 @@ function CostSummary({ digests }: { digests: AgentDigest[] }) {
       className="mt-4 pt-3 text-[10px] font-mono flex items-center gap-4 flex-wrap"
       style={{ color: COLORS.textDim, borderTop: `1px solid ${COLORS.border}` }}
     >
-      <span>THIS MONTH</span>
+      <span>DISPLAYED HISTORY · ESTIMATED MODEL COST</span>
       <span>{monthCosts.tickCount} ticks</span>
       <span>
         {(monthCosts.inTokens / 1000).toFixed(1)}K in / {(monthCosts.outTokens / 1000).toFixed(1)}K out
@@ -900,7 +910,7 @@ function ApprovalCard({
         </span>
       </div>
       <div className="text-[13px] leading-[1.5] mb-2" style={{ color: COLORS.textBright }}>
-        {approval.rationale}
+        {approval.rationale}{approval.execution_status && <p>Execution: {approval.execution_status.replaceAll('_', ' ')}. Submitted does not mean filled. {approval.execution_errors?.join('; ')}</p>}
       </div>
       {approval.proposals.length > 0 && (
         <details>
@@ -924,7 +934,7 @@ function ApprovalCard({
                   {p.expiry ?? ''} {p.strike != null ? `@${p.strike}` : ''} · {sizeHintLabel(p.size_hint)}
                 </span>
                 <div style={{ color: COLORS.text }} className="mt-1">
-                  {p.rationale}
+                  Model rationale (unverified): {p.rationale}
                 </div>
               </div>
             ))}
@@ -1050,8 +1060,8 @@ export default function AgentDigestSection() {
     <div id="section-agent">
       <SectionCard
         number="07"
-        title="What the agent thinks we should do"
-        quote="The agent reads the economic data and suggests trades. You decide whether to act. Here's the latest read and what it's recommending."
+        title="Monitoring, trading status and order evidence"
+        quote="Trading status comes from saved configuration. Orders and fills require recorded evidence. Model proposals remain separate from execution."
         verdict={verdict}
         accentColor={COLORS.accent}
       >
@@ -1072,7 +1082,7 @@ export default function AgentDigestSection() {
 
         <StatusStrip config={config} latest={latest} digestCount={digests.length} />
 
-        <ActiveSleeveStrip active={activeSleeve} />
+        <details className="my-3 border rounded p-3"><summary className="cursor-pointer">Portfolio and fast-score snapshot · {latestSnapshot ? new Date(latestSnapshot.taken_at).toLocaleString() : 'unavailable'} · budget room is not trade authorization</summary><ActiveSleeveStrip active={activeSleeve} /></details>
 
         {isLoading && digests.length === 0 ? (
           <div
