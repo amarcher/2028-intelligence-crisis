@@ -9,6 +9,7 @@ import PhaseFlipSignals from './components/sections/PhaseFlipSignals';
 import MetaSignals from './components/sections/MetaSignals';
 import AgentDigest from './components/sections/AgentDigest';
 import ShippingPulse from './components/sections/ShippingPulse';
+import NeocloudPolicyWatch from './components/sections/NeocloudPolicyWatch';
 import FeedbackLoop from './components/FeedbackLoop';
 import ClaimTracker from './components/ClaimTracker';
 import Methodology from './components/Methodology';
@@ -22,6 +23,7 @@ export default function Dashboard() {
       <PhaseFlipSignals />
       <MetaSignals />
       <ShippingPulse />
+      <NeocloudPolicyWatch />
       <details className="my-6 p-4 border rounded">
         <summary className="cursor-pointer font-bold">Original thesis and historical context — editorial assessments are not live signals</summary>
         <p className="my-3">The sections below contain seeded claims, sample indicators and historical verdicts. Expired forecast deadlines need a fresh review; these labels do not establish that predictions came true.</p>
